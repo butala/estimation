@@ -53,8 +53,6 @@ estimation::KF<T>::measurement_update(
     const size_t M = H.rows();
     const size_t N = H.cols();
 
-    assert(x_hat.size() == N);
-    assert(P.rows() == P.cols() == N);
     assert(y.size() == M);
     assert(R.rows() == R.cols() == M);
 
@@ -75,6 +73,30 @@ estimation::KF<T>::measurement_update(
 
     x_hat += C * b;
     P -= C * B;
+
+    return x_hat;
+}
+
+
+template <class T>
+Eigen::Vector<T, Eigen::Dynamic>
+estimation::KF<T>::time_update(
+    const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &F,
+    const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &Q,
+    const Eigen::Ref<Eigen::Vector<T, Eigen::Dynamic>> &z)
+{
+    assert(F.rows() == F.cols() == N);
+    assert(Q.rows() == Q.cols() == N);
+    if (z.size() > 0) {
+        assert(z.size() == N);
+    }
+
+    x_hat = F * x_hat;
+    P = F * P * F.transpose() + Q;
+
+    if (z.size() > 0) {
+        x_hat += z;
+    }
 
     return x_hat;
 }

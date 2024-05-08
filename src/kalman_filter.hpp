@@ -29,6 +29,12 @@ namespace estimation {
                            const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &H,
                            const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &R);
 
+
+        Eigen::Vector<T, Eigen::Dynamic>
+        time_update(const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &F,
+                    const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &Q,
+                    const Eigen::Ref<Eigen::Vector<T, Eigen::Dynamic>> &z = Eigen::Vector<T, 0>());
+
     private:
         size_t N;
         Eigen::Vector<T, Eigen::Dynamic> x_hat;

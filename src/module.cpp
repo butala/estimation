@@ -4,6 +4,7 @@
 
 namespace nb = nanobind;
 
+using namespace nb::literals;
 using namespace estimation;
 
 
@@ -13,10 +14,14 @@ NB_MODULE(lib, m) {
         .def("x_hat", &KF<double>::get_x_hat)
         .def("P", &KF<double>::get_P)
         .def("initialize", &KF<double>::initialize,
-             nb::arg("x_hat").noconvert(),
-             nb::arg("P").noconvert())
+             "x_hat"_a.noconvert(),
+             "P"_a.noconvert())
         .def("measurement_update", &KF<double>::measurement_update,
-             nb::arg("y").noconvert(),
-             nb::arg("H").noconvert(),
-             nb::arg("R").noconvert());
+             "y"_a.noconvert(),
+             "H"_a.noconvert(),
+             "R"_a.noconvert())
+        .def("time_update", &KF<double>::time_update,
+             "F"_a.noconvert(),
+             "Q"_a.noconvert(),
+             "z"_a.noconvert() = Eigen::Vector<double, 0>());
 }
