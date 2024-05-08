@@ -9,40 +9,43 @@
 
 namespace estimation {
 
-    template <class T = double>
+    template <typename T = double>
     class KF {
     public:
         KF(const size_t N);
 
-        Eigen::Vector<T, Eigen::Dynamic>
+        typedef typename Eigen::Vector<T, Eigen::Dynamic> Vector;
+        typedef typename Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> Matrix;
+
+        Vector
         get_x_hat() const;
 
-        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>
+        Matrix
         get_P() const;
 
         void
-        initialize(const Eigen::Ref<Eigen::Vector<T, Eigen::Dynamic>> &x_hat,
-                   const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &P);
+        initialize(const Eigen::Ref<Vector> &x_hat,
+                   const Eigen::Ref<Matrix> &P);
 
         Eigen::Vector<T, Eigen::Dynamic>
-        measurement_update(const Eigen::Ref<Eigen::Vector<T, Eigen::Dynamic>> &y,
-                           const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &H,
-                           const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &R);
+        measurement_update(const Eigen::Ref<Vector> &y,
+                           const Eigen::Ref<Matrix> &H,
+                           const Eigen::Ref<Matrix> &R);
 
 
         Eigen::Vector<T, Eigen::Dynamic>
-        time_update(const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &F,
-                    const Eigen::Ref<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> &Q,
-                    const Eigen::Ref<Eigen::Vector<T, Eigen::Dynamic>> &z = Eigen::Vector<T, 0>());
+        time_update(const Eigen::Ref<Matrix> &F,
+                    const Eigen::Ref<Matrix> &Q,
+                    const Eigen::Ref<Vector> &z = Eigen::Vector<T, 0>());
 
     private:
         size_t N;
-        Eigen::Vector<T, Eigen::Dynamic> x_hat;
-        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> P;
-        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> A;
-        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> B;
-        Eigen::Vector<T, Eigen::Dynamic> b;
-        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> C;
+        Vector x_hat;
+        Matrix P;
+        Matrix A;
+        Matrix B;
+        Vector b;
+        Matrix C;
     };
 
 }
