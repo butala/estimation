@@ -2,16 +2,47 @@
 
 Kalman-family state estimation in C++ (Eigen) with Python bindings (nanobind).
 
-Two implementations of the **same** Kalman filter map, differing only in how
-uncertainty is stored:
+## Filters
+
+**Exact Kalman filter** — three uncertainty representations, one map:
 
 | Class | Stores | Notes |
 |---|---|---|
 | `KF` | `P` | covariance form, the reference / "oracle" |
-| `SquareRootKF` | `L`, `P = L Lᵀ` | Cholesky factor form; `P` is never formed and cannot lose symmetry or positive definiteness |
+| `SquareRootKF` | `L`, `P = L Lᵀ` | Cholesky factor form; `P` never formed |
+| `UDKF` | `L`, `D`, `P = L D Lᵀ` | Bierman's factored form; `O(N²)` per scalar row |
 
-Monte Carlo variants (`EnKF`, `ETKF`, `LETKF`, `EnKS`) are planned and slot into
-the same interface — see `RESEARCH_AGENDA.md`.
+**Monte Carlo Kalman methods** — one shared LKF mean, four anomaly algebras:
+
+| Class | Anomaly update | Reference |
+|---|---|---|
+| `EnKF` | `(I−KH)X + KE`, recentered `E ~ N(0,R)` | Evensen 1994; Burgers et al. 1998 |
+| `EnSRF` | sequential `(I−αkh)X` | Whitaker & Hamill 2002 |
+| `EAKF` | sequential observation-space regression | Anderson 2001 |
+| `ETKF` | block `X C^{−1/2}` | Bishop, Etherton & Hodyss 2001 |
+
+**Localization is a knob, not an algorithm:** `LETKF` is `ETKF` plus a *required*
+taper, `LEKS` is `EnKS` plus a required taper — exactly as `LKF = KF + set_taper`.
+
+**Smoothers** (fixed interval):
+
+| Class | What it is |
+|---|---|
+| `rts_smooth(record, F, Q)` | exact Rauch–Tung–Striebel on a `BatchOutput` — the reference |
+| `EnKS` | Evensen's ensemble smoother: EnKF forward + lag-one cross-covariances |
+| `LEKS` | `EnKS` + a required taper (the taper acts on the smoother regression) |
+
+### Equivalences the tests enforce
+
+- `KF == SquareRootKF == UDKF` — exactly (all three are the same filter), with
+  and without a taper
+- `EnSRF == EAKF == ETKF` — exactly the same mean and covariance from one
+  shared prior ensemble (they coincide for sequential scalar rows; ETKF's
+  members differ by a rotation, per Sakov & Oke 2008)
+- all four ensemble methods, and `LETKF`/`LEKS`, converge to `KF`/the `LKF` as
+  `L → ∞` (statistical)
+- `LETKF == ETKF + set_taper`, `LEKS == EnKS + set_taper` — exact
+- `EnKS → rts_smooth` as `L → ∞`
 
 ## API
 
@@ -94,7 +125,7 @@ This produces `build-py/src/lib.cpython-*.so`. (A wheel can also be built with
 
 ## Test
 
-### C++ unit tests — 29 cases / 133 checks
+### C++ unit tests — 42 cases / 222 checks
 
 ```bash
 ./build/src/test
@@ -102,13 +133,16 @@ This produces `build-py/src/lib.cpython-*.so`. (A wheel can also be built with
 
 Exits 0 on success. Covers: scalar closed forms; the Kalman gain against an
 explicit inverse; an **independent Joseph / gain reference written from the
-paper**; `KF == SquareRootKF` in every configuration (plain, taper, inflation,
-both) and through `Filter<T>&`; taper = LKF semantics; inflation; the `u`
-overload; edge cases (`N=1`, `Q=0`, rank-deficient `Q`, `F=0`, tiny `R`);
-500-step drift-free stability; `batch`/`Record` masks and chunking; contract
-violations; 20000-update memory stability.
+paper**; `KF == SquareRootKF == UDKF` in every configuration (plain, taper,
+inflation, both) and through `Filter<T>&`; the Bierman downdate against a dense
+factorization; UD factorization invariants; taper = LKF semantics; inflation;
+the `u` overload; edge cases (`N=1`, `Q=0`, rank-deficient `Q`, `F=0`, tiny
+`R`); 500-step drift-free stability; `batch`/`Record` masks and chunking;
+`EnSRF == EAKF == ETKF` and the ETKF rotation; ensemble convergence to
+`KF`/`LETKF`; `rts_smooth` monotonicity; `EnKS → RTS`; `LEKS == EnKS + taper`;
+contract violations; 20000-update memory stability.
 
-### Python binding tests — 11 cases / 49 checks
+### Python binding tests — 20 cases / 119 checks
 
 ```bash
 export ESTIMATION_LIB=$(ls "$PWD"/build-py/src/lib.cpython-*.so)
@@ -160,6 +194,9 @@ src/
   filter.hpp                Filter<T> interface, Types, Record, BatchOutput, taper/inflation
   kalman_filter.hpp/.cpp    KF<T>            (covariance form)
   square_root_kf.hpp/.cpp   SquareRootKF<T>  (Cholesky factor form)
+  ud_filter.hpp/.cpp        UDKF<T>          (Bierman factored form)
+  ensemble_filter.hpp/.cpp  EnsembleFilter<T>, EnKF, EnSRF, EAKF, ETKF, LETKF
+  smoother.hpp/.cpp         rts_smooth, EnKS<T>, LEKS<T>
   module.cpp                nanobind bindings
   testing.hpp               minimal dependency-free test harness
   test.cpp                  C++ unit tests

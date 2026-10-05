@@ -486,6 +486,221 @@ def test_batch_semantics():
 
 
 # --------------------------------------------------------------------------
+# 9. the Kalman family: KF == SquareRootKF == UDKF
+# --------------------------------------------------------------------------
+
+def test_udkf_agrees_with_kf():
+    n, m, steps = 6, 3, 15
+    rng = np.random.default_rng(4242)
+    a, b, c = lib.KF(n), lib.SquareRootKF(n), lib.UDKF(n)
+    worst_x = worst_P = 0.0
+    for s in range(steps):
+        x0 = rng.standard_normal(n)
+        P0 = spd(n, seed=s)
+        for f in (a, b, c):
+            f.initialize(x0, P0)
+        H = fortran(rng.standard_normal((m, n)))
+        R = spd(m, seed=s + 1)
+        y = rng.standard_normal(m)
+        F = fortran(np.eye(n) * 0.97 + 0.03 * rng.standard_normal((n, n)))
+        Q = spd(n, seed=s + 2) * 1e-3
+        u = rng.standard_normal(n)
+        for f in (a, b, c):
+            f.measurement_update(y, H, R)
+        worst_x = max(worst_x, float(np.max(np.abs(a.state() - b.state()))),
+                      float(np.max(np.abs(a.state() - c.state()))))
+        worst_P = max(worst_P, float(np.max(np.abs(a.covariance() - b.covariance()))),
+                      float(np.max(np.abs(a.covariance() - c.covariance()))))
+        for f in (a, b, c):
+            f.time_update(F, Q, u)
+    check(worst_x < 1e-10, "KF == SquareRootKF == UDKF, state", f"{worst_x:.2e}")
+    check(worst_P < 1e-10, "KF == SquareRootKF == UDKF, covariance", f"{worst_P:.2e}")
+
+
+def test_udkf_agrees_with_kf_under_taper():
+    n, m = 6, 3
+    rng = np.random.default_rng(9)
+    C = fortran(0.5 ** np.abs(np.subtract.outer(np.arange(n), np.arange(n))))
+    a, b = lib.KF(n), lib.UDKF(n)
+    x0 = rng.standard_normal(n)
+    P0 = spd(n, seed=1)
+    H = fortran(rng.standard_normal((m, n)))
+    y = rng.standard_normal(m)
+    R = spd(m, seed=2)
+    for f in (a, b):
+        f.set_taper(C)
+        f.initialize(x0, P0)
+        f.measurement_update(y, H, R)
+    check(np.allclose(a.state(), b.state(), atol=1e-11), "UDKF (taper) == KF, state")
+    check(np.allclose(a.covariance(), b.covariance(), atol=1e-11), "UDKF (taper) == KF, covariance")
+
+
+def test_udkf_factorization_invariants():
+    n = 7
+    f = lib.UDKF(n)
+    f.initialize(np.zeros(n), spd(n))
+    for _ in range(10):
+        f.measurement_update(np.ones(3), mat(3, n), spd(3, seed=3))
+        f.time_update(mat(n, n) * 0.1 + np.eye(n), spd(n, seed=4) * 1e-3)
+        L, D = f.unit_lower(), f.diagonal()
+        check(np.allclose(np.triu(L, 1), 0.0), "UDKF: L has empty strict upper triangle")
+        check(np.allclose(np.diag(L), 1.0), "UDKF: diag(L) == 1")
+        check(bool(np.all(D > 0)), "UDKF: D > 0")
+        check(np.allclose(L @ np.diag(D) @ L.T, f.covariance(), atol=1e-11),
+              "UDKF: L D L^T == covariance()")
+
+
+# --------------------------------------------------------------------------
+# 10. the ensemble family
+# --------------------------------------------------------------------------
+
+def test_ensemble_family_agrees():
+    n, m, L = 6, 3, 3000
+    rng = np.random.default_rng(77)
+    x0 = rng.standard_normal(n)
+    P0 = spd(n, seed=1)
+    H = fortran(rng.standard_normal((m, n)))
+    R = spd(m, seed=2)
+    y = rng.standard_normal(m)
+
+    ref = lib.KF(n)
+    ref.initialize(x0, P0)
+    ref.measurement_update(y, H, R)
+
+    a = lib.EnKF(n, L, 1)
+    b = lib.EnSRF(n, L, 1)
+    c = lib.EAKF(n, L, 1)
+    d = lib.ETKF(n, L, 1)
+    a.initialize(x0, P0)
+    X = a.members()                       # one shared prior ensemble
+    for e in (b, c, d):
+        e.set_members(X)
+    for e in (a, b, c, d):
+        e.measurement_update(y, H, R)
+
+    # Deterministic trio agree exactly on mean and covariance.
+    check(np.allclose(b.state(), c.state(), atol=1e-12), "EnSRF == EAKF, state")
+    check(np.allclose(b.state(), d.state(), atol=1e-12), "EnSRF == ETKF, state")
+    check(np.allclose(b.covariance(), c.covariance(), atol=1e-12), "EnSRF == EAKF, covariance")
+    check(np.allclose(b.covariance(), d.covariance(), atol=1e-12), "EnSRF == ETKF, covariance")
+    # ETKF's members are a rotation of EnSRF's (different factor, same cov).
+    rot = np.linalg.norm(b.anomalies() - d.anomalies()) / np.linalg.norm(b.anomalies())
+    check(rot > 1e-6, "ETKF members rotate EnSRF's", f"{rot:.2e}")
+    # All four converge to KF at O(1/sqrt(L)).
+    for name, e in (("EnKF", a), ("EnSRF", b), ("EAKF", c), ("ETKF", d)):
+        err = np.linalg.norm(e.covariance() - ref.covariance()) / np.linalg.norm(ref.covariance())
+        check(err < 0.15, f"{name} covariance within 15% of KF (L={L})", f"{err:.3f}")
+
+
+def test_letkf_is_etkf_plus_taper():
+    n, m, L = 6, 3, 50
+    C = fortran(0.5 ** np.abs(np.subtract.outer(np.arange(n), np.arange(n))))
+    rng = np.random.default_rng(3)
+    a = lib.LETKF(n, L, C, 5)
+    b = lib.ETKF(n, L, 5)
+    b.set_taper(C)
+    a.initialize(rng.standard_normal(n), spd(n))
+    b.set_members(a.members())
+    H = fortran(rng.standard_normal((m, n)))
+    y = rng.standard_normal(m)
+    R = spd(m, seed=8)
+    a.measurement_update(y, H, R)
+    b.measurement_update(y, H, R)
+    check(np.allclose(a.state(), b.state(), atol=1e-13), "LETKF == ETKF + taper, state")
+    check(np.allclose(a.covariance(), b.covariance(), atol=1e-13), "LETKF == ETKF + taper, covariance")
+    check(a.has_taper(), "LETKF has a taper")
+
+
+def test_ensemble_members_round_trip():
+    n, L = 5, 40
+    f = lib.EnKF(n, L, 1)
+    f.initialize(np.arange(n, dtype=float), spd(n))
+    X = f.members()
+    check(X.shape == (n, L), "members() is N x L")
+    check(np.allclose(X.mean(axis=1), f.state()), "members' mean is state()")
+    check(np.allclose(f.anomalies().sum(axis=1), 0.0, atol=1e-12), "anomalies are centered")
+    check(np.allclose(f.anomalies() @ f.anomalies().T / (L - 1), f.covariance(), atol=1e-11),
+          "anomalies reproduce covariance()")
+    # set_members is the exact inverse of members()
+    g = lib.EnSRF(n, L, 1)
+    g.set_members(X)
+    check(np.allclose(g.members(), X, atol=1e-12), "set_members(members()) round-trips")
+
+
+def test_smoother_converges_to_rts():
+    n, m, I, L = 4, 2, 6, 4000
+    rng = np.random.default_rng(5150)
+    ys = [rng.standard_normal(m) for _ in range(I)]
+    Hs = [fortran(rng.standard_normal((m, n))) for _ in range(I)]
+    Rs = [spd(m, seed=i) for i in range(I)]
+    Fs = [fortran(np.eye(n) * 0.95 + 0.05 * rng.standard_normal((n, n))) for _ in range(I)]
+    Qs = [spd(n, seed=i) * 1e-3 for i in range(I)]
+    x0 = rng.standard_normal(n)
+    P0 = spd(n, seed=9)
+
+    # Exact reference: KF forward record + RTS.
+    ref = lib.KF(n)
+    ref.initialize(x0, P0)
+    rec = ref.batch(ys, Hs, Rs, Fs, Qs)
+    exact = lib.rts_smooth(rec, Fs, Qs)
+
+    ks = lib.EnKS(n, L, 1)
+    ks.initialize(x0, P0)
+    sm = ks.smooth(ys, Hs, Rs, Fs, Qs)
+    check(len(sm.x_smoothed) == I and len(sm.P_smoothed) == I, "EnKS lengths")
+    worst = max(
+        float(np.linalg.norm(exact.x_smoothed[i] - sm.x_smoothed[i]))
+        for i in range(I))
+    check(worst < 0.5, "EnKS (L=4000) vs RTS, state", f"{worst:.3f}")
+    # Terminal condition of the exact smoother.
+    check(np.allclose(exact.P_smoothed[-1], rec.P_posterior[-1], atol=1e-10),
+          "rts_smooth: terminal condition")
+
+
+def test_leks_is_enks_plus_taper():
+    n, m, I, L = 5, 2, 4, 30
+    C = fortran(0.5 ** np.abs(np.subtract.outer(np.arange(n), np.arange(n))))
+    rng = np.random.default_rng(2)
+    ys = [rng.standard_normal(m) for _ in range(I)]
+    Hs = [fortran(rng.standard_normal((m, n))) for _ in range(I)]
+    Rs = [spd(m, seed=i) for i in range(I)]
+    Fs = [fortran(np.eye(n)) for _ in range(I)]
+    Qs = [spd(n, seed=i) * 1e-3 for i in range(I)]
+    x0 = rng.standard_normal(n)
+    P0 = spd(n, seed=6)
+
+    a = lib.LEKS(n, L, C, 3)
+    b = lib.EnKS(n, L, 3)
+    b.set_taper(C)
+    a.initialize(x0, P0)
+    sa = a.smooth(ys, Hs, Rs, Fs, Qs)
+    b.initialize(x0, P0)
+    sb = b.smooth(ys, Hs, Rs, Fs, Qs)
+    same = all(np.allclose(sa.x_smoothed[i], sb.x_smoothed[i], atol=1e-13)
+               and np.allclose(sa.P_smoothed[i], sb.P_smoothed[i], atol=1e-13)
+               for i in range(I))
+    check(same, "LEKS == EnKS + taper")
+    check(a.has_taper(), "LEKS has a taper")
+
+
+def test_new_contracts_throw():
+    n = 4
+    f = lib.EnKF(n, 20, 1)
+    check_raises(ValueError, lambda: f.initialize(vec(n + 1), spd(n)),
+                 "EnKF.initialize: wrong size x raises ValueError")
+    check_raises(ValueError, lambda: f.set_members(mat(n, 3)),
+                 "EnKF.set_members: wrong shape raises ValueError")
+    g = lib.UDKF(n)
+    check_raises(ValueError, lambda: g.initialize(vec(n), mat(n, n + 1)),
+                 "UDKF.initialize: non-square P raises ValueError")
+    ks = lib.EnKS(n, 20, 1)
+    check_raises(ValueError,
+                 lambda: ks.smooth([vec(2), vec(2)], [mat(2, n)],
+                                   [spd(2), spd(2)], [np.eye(n)], [spd(n)]),
+                 "EnKS.smooth: inconsistent lengths raise ValueError")
+
+
+# --------------------------------------------------------------------------
 # 8. memory stability across many updates
 # --------------------------------------------------------------------------
 
@@ -522,6 +737,15 @@ def test_memory_stability():
 
 TESTS = [
     test_inputs_accepted,
+    test_udkf_agrees_with_kf,
+    test_udkf_agrees_with_kf_under_taper,
+    test_udkf_factorization_invariants,
+    test_ensemble_family_agrees,
+    test_letkf_is_etkf_plus_taper,
+    test_ensemble_members_round_trip,
+    test_smoother_converges_to_rts,
+    test_leks_is_enks_plus_taper,
+    test_new_contracts_throw,
     test_zero_copy_is_real,
     test_inputs_rejected,
     test_readonly_never_triggers_a_write,

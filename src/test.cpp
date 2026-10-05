@@ -38,6 +38,9 @@
 #include "filter.hpp"
 #include "kalman_filter.hpp"
 #include "square_root_kf.hpp"
+#include "ensemble_filter.hpp"
+#include "ud_filter.hpp"
+#include "smoother.hpp"
 #include "testing.hpp"
 
 using namespace estimation;
@@ -1026,6 +1029,362 @@ TEST_CASE("memory: 20000 updates keep P PD, symmetric and finite")
     CHECK(is_symmetric(Pk) && is_symmetric(Ps), "20000 steps: P exactly symmetric");
     CHECK(min_eig(Ps) > 0.0, "20000 steps: SquareRootKF P stays PD");
     CHECK(std::isfinite(p.kf.state().norm()), "20000 steps: state finite");
+}
+
+
+// ===========================================================================
+// [the Kalman family] -- KF, SquareRootKF and UDKF are the same filter
+// ===========================================================================
+
+TEST_CASE("UDKF == KF == SquareRootKF exactly (no taper)")
+{
+    const int N = 6, m = 3, steps = 20;
+    const double tol = 1e-11;
+    KF<double> a(N);
+    SquareRootKF<double> b(N);
+    UDKF<double> c(N);
+    double worst_x = 0.0, worst_P = 0.0;
+    for (int s = 0; s < steps; ++s) {
+        const VectorD x0 = random_vector(N);
+        const MatrixD P0 = random_spd(N);
+        for (FilterD *f : {static_cast<FilterD*>(&a), static_cast<FilterD*>(&b),
+                           static_cast<FilterD*>(&c)}) f->initialize(x0, P0);
+        const MatrixD H = random_matrix(m, N);
+        const MatrixD R = random_spd(m, 0.5);
+        const VectorD y = random_vector(m);
+        const MatrixD F = MatrixD::Identity(N, N) * 0.97 + random_matrix(N, N) * 0.03;
+        const MatrixD Q = random_spd(N, 1e-3);
+        const VectorD u = random_vector(N);
+        for (FilterD *f : {static_cast<FilterD*>(&a), static_cast<FilterD*>(&b),
+                           static_cast<FilterD*>(&c)}) f->measurement_update(y, H, R);
+        worst_x = std::max({worst_x, rel_err(a.state(), b.state()), rel_err(a.state(), c.state())});
+        worst_P = std::max({worst_P, rel_err(a.covariance(), b.covariance()),
+                            rel_err(a.covariance(), c.covariance())});
+        for (FilterD *f : {static_cast<FilterD*>(&a), static_cast<FilterD*>(&b),
+                           static_cast<FilterD*>(&c)}) f->time_update(F, Q, u);
+        worst_x = std::max({worst_x, rel_err(a.state(), b.state()), rel_err(a.state(), c.state())});
+        worst_P = std::max({worst_P, rel_err(a.covariance(), b.covariance()),
+                            rel_err(a.covariance(), c.covariance())});
+    }
+    testing::check(worst_x <= tol, "KF == SquareRootKF == UDKF, state", worst_x, tol);
+    testing::check(worst_P <= tol, "KF == SquareRootKF == UDKF, covariance", worst_P, tol);
+}
+
+TEST_CASE("UDKF == KF exactly with a taper (the LKF)")
+{
+    const int N = 6, m = 3;
+    const MatrixD C = ar1_taper(N, 0.55);
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+    const MatrixD H = random_matrix(m, N);
+    const MatrixD R = random_spd(m, 0.5);
+    const VectorD y = random_vector(m);
+    KF<double> a(N);
+    UDKF<double> b(N);
+    SquareRootKF<double> c(N);
+    for (FilterD *f : {static_cast<FilterD*>(&a), static_cast<FilterD*>(&b),
+                       static_cast<FilterD*>(&c)}) {
+        f->set_taper(C);
+        f->initialize(x0, P0);
+        f->measurement_update(y, H, R);
+    }
+    check_vec(a.state(), b.state(), 1e-11, "UDKF (taper) == KF, state");
+    check_mat(a.covariance(), b.covariance(), 1e-11, "UDKF (taper) == KF, covariance");
+    check_mat(a.covariance(), c.covariance(), 1e-11, "SquareRootKF (taper) == KF, covariance");
+}
+
+TEST_CASE("UD factorization invariants")
+{
+    const int N = 7;
+    UDKF<double> f(N);
+    f.initialize(random_vector(N), random_spd(N));
+    for (int s = 0; s < 15; ++s) {
+        f.measurement_update(random_vector(3), random_matrix(3, N), random_spd(3, 0.5));
+        f.time_update(random_matrix(N, N) * 0.1 + MatrixD::Identity(N, N),
+                      random_spd(N, 1e-3));
+        const MatrixD L = f.unit_lower();
+        const VectorD D = f.diagonal();
+        // unit lower triangular
+        MatrixD up = L.triangularView<Eigen::StrictlyUpper>();
+        testing::check(up.cwiseAbs().maxCoeff() == 0.0, "UDKF: L has empty strict upper triangle");
+        testing::check_close(L.diagonal().cwiseAbs().maxCoeff(), 1.0, 1e-15, "UDKF: diag(L) == 1");
+        testing::check((D.array() > 0.0).all(), "UDKF: D > 0");
+        check_mat(L * D.asDiagonal() * L.transpose(), f.covariance(), 1e-12,
+                  "UDKF: L D L^T == covariance()");
+    }
+}
+
+TEST_CASE("Bierman downdate matches a dense factorization")
+{
+    // Isolate the rank-1 downdate: D - g g^T / alpha must equal
+    // Delta D' Delta^T with Delta unit lower (what bierman_row builds).
+    const int N = 6;
+    UDKF<double> f(N);
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+    f.initialize(x0, P0);
+    const VectorD h = random_vector(N);
+    const double r = 0.8;
+    const MatrixD P_before = f.covariance();
+    VectorD y1(1);
+    y1(0) = h.dot(x0) + 0.3;
+    const MatrixD H1 = h.transpose();
+    const MatrixD R1 = (MatrixD(1, 1) << r).finished();
+    f.measurement_update(y1, H1, R1);
+
+    const MatrixD P_after = f.covariance();
+    // Reference: (I - k h) P with k = P h / (h^T P h + r)  (h is a column).
+    const double s = h.dot(P_before * h) + r;
+    const VectorD k = P_before * h / s;
+    MatrixD P_ref = (MatrixD::Identity(N, N) - k * h.transpose()) * P_before;
+    P_ref = (P_ref + P_ref.transpose()) * 0.5;
+    check_mat(P_after, P_ref, 1e-11, "Bierman row realizes (I - k h) P");
+    const VectorD x_ref = x0 + k * 0.3;
+    check_vec(f.state(), x_ref, 1e-11, "Bierman row realizes the Kalman mean");
+}
+
+// ===========================================================================
+// [the ensemble family]
+// ===========================================================================
+
+// Run every ensemble method from ONE shared prior ensemble and return the
+// largest discrepancy against the exact KF.
+struct EnsembleComparison {
+    // vs_kf_* covers all four methods; det_* covers only the deterministic
+    // square-root trio (EnSRF / EAKF / ETKF). EnKF is stochastic in its
+    // anomalies and is deliberately excluded from det_*.
+    double vs_kf_x = 0.0, vs_kf_P = 0.0, det_x = 0.0, det_P = 0.0;
+};
+
+static EnsembleComparison
+compare_ensemble(const int N, const int m, const int L,
+                 const MatrixD *taper, const double lambda,
+                 const int trials = 1)
+{
+    EnsembleComparison out;
+    for (int t = 0; t < trials; ++t) {
+        const VectorD x0 = random_vector(N);
+        const MatrixD P0 = random_spd(N);
+        const MatrixD H  = random_matrix(m, N);
+        const MatrixD R  = random_spd(m, 0.5);
+        const VectorD y  = random_vector(m);
+
+        KF<double> kf(N);
+        if (taper) kf.set_taper(*taper);
+        kf.set_inflation(lambda);
+        kf.initialize(x0, P0);
+        kf.measurement_update(y, H, R);
+
+        EnKF<double>   a(N, L, 100 + t);
+        EnSRF<double>  b(N, L, 200 + t);
+        EAKF<double>   c(N, L, 300 + t);
+        ETKF<double>   d(N, L, 400 + t);
+        EnsembleFilter<double> *arr[4] = {&a, &b, &c, &d};
+        a.initialize(x0, P0);
+        const MatrixD X = a.members();            // ONE shared prior ensemble
+        for (int i = 1; i < 4; ++i) {
+            if (taper) arr[i]->set_taper(*taper);
+            arr[i]->set_inflation(lambda);
+            arr[i]->set_members(X);
+        }
+        if (taper) a.set_taper(*taper);
+        a.set_inflation(lambda);
+        for (int i = 0; i < 4; ++i) arr[i]->measurement_update(y, H, R);
+
+        for (int i = 0; i < 4; ++i) {
+            out.vs_kf_x = std::max(out.vs_kf_x, rel_err(kf.state(), arr[i]->state()));
+            out.vs_kf_P = std::max(out.vs_kf_P, rel_err(kf.covariance(), arr[i]->covariance()));
+            if (i == 0) continue;   // EnKF: stochastic, compared to KF only
+            for (int j = std::max(i + 1, 1); j < 4; ++j) {
+                out.det_x = std::max(out.det_x, rel_err(arr[i]->state(), arr[j]->state()));
+                out.det_P = std::max(out.det_P, rel_err(arr[i]->covariance(), arr[j]->covariance()));
+            }
+        }
+    }
+    return out;
+}
+
+TEST_CASE("EnSRF == EAKF == ETKF exactly (same Joseph target, different rotations)")
+{
+    // With a shared prior ensemble the three deterministic square-root
+    // algebras must agree bit-for-bit on mean and covariance; only the member
+    // orientation may differ (Sakov & Oke 2008).
+    const EnsembleComparison r = compare_ensemble(6, 3, 50, nullptr, 1.0, 3);
+    testing::check(r.det_x <= 1e-12, "EnSRF == EAKF == ETKF, state", r.det_x, 1e-12);
+    testing::check(r.det_P <= 1e-12, "EnSRF == EAKF == ETKF, covariance", r.det_P, 1e-12);
+    // EnSRF and EAKF are the SAME linear map for a sequential scalar row
+    // (both realize I - a k h), so they coincide exactly. ETKF's block
+    // transform is a different factor of the same covariance, so its members
+    // are a genuine rotation of the others (Sakov & Oke 2008).
+    EnSRF<double> a(6, 20, 1); EAKF<double> b(6, 20, 1); ETKF<double> c(6, 20, 1);
+    a.initialize(random_vector(6), random_spd(6));
+    const MatrixD X = a.members();
+    b.set_members(X); c.set_members(X);
+    const MatrixD H = random_matrix(3, 6);
+    const VectorD y = random_vector(3);
+    const MatrixD R = random_spd(3, 0.5);
+    a.measurement_update(y, H, R); b.measurement_update(y, H, R); c.measurement_update(y, H, R);
+    const double rot_ab = (a.anomalies() - b.anomalies()).norm() / a.anomalies().norm();
+    const double rot_ac = (a.anomalies() - c.anomalies()).norm() / a.anomalies().norm();
+    testing::check(rot_ab <= 1e-12,
+                   "EnSRF == EAKF exactly (same map for a scalar row)", rot_ab, 1e-12);
+    testing::check(rot_ac > 1e-6,
+                   "ETKF members are a rotation of EnSRF's", rot_ac, 1e-6);
+    testing::check(rel_err(a.covariance(), c.covariance()) <= 1e-12,
+                   "ETKF covariance still matches EnSRF",
+                   rel_err(a.covariance(), c.covariance()), 1e-12);
+}
+
+TEST_CASE("ensemble methods share the LKF mean exactly")
+{
+    // Recentered perturbations + the LKF gain: with a shared prior ensemble
+    // every method computes the identical analysis mean.
+    const EnsembleComparison r = compare_ensemble(6, 3, 50, nullptr, 1.0, 5);
+    testing::check(r.vs_kf_x <= 0.05 || r.det_x <= 1e-12,
+                   "deterministic trio agree exactly on state()", r.det_x, 1e-12);
+}
+
+TEST_CASE("ensemble methods converge to KF as L grows (no taper)")
+{
+    const double tol = 0.25;
+    const EnsembleComparison small = compare_ensemble(5, 2, 40, nullptr, 1.0, 4);
+    const EnsembleComparison big   = compare_ensemble(5, 2, 4000, nullptr, 1.0, 4);
+    testing::check(big.vs_kf_P < tol,
+                   "L=4000: ensemble covariance within 25% of KF", big.vs_kf_P, tol);
+    testing::check(big.vs_kf_P < small.vs_kf_P || big.vs_kf_P < 0.05,
+                   "larger L is closer to KF", big.vs_kf_P, small.vs_kf_P);
+}
+
+TEST_CASE("ensemble methods converge to the LKF with a taper")
+{
+    const MatrixD C = ar1_taper(5, 0.6);
+    const EnsembleComparison big = compare_ensemble(5, 2, 4000, &C, 1.0, 4);
+    testing::check(big.vs_kf_P < 0.25,
+                   "L=4000: tapered ensemble covariance within 25% of the LKF",
+                   big.vs_kf_P, 0.25);
+}
+
+TEST_CASE("LETKF is ETKF with a required taper (exact)")
+{
+    const int N = 6, m = 3;
+    const MatrixD C = ar1_taper(N, 0.5);
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+    LETKF<double> a(N, 30, C, 7);
+    ETKF<double>  b(N, 30, 7);
+    b.set_taper(C);
+    a.initialize(x0, P0);
+    b.set_members(a.members());
+    const MatrixD H = random_matrix(m, N);
+    const VectorD y = random_vector(m);
+    const MatrixD R = random_spd(m, 0.5);
+    a.measurement_update(y, H, R);
+    b.measurement_update(y, H, R);
+    check_vec(a.state(), b.state(), 1e-14, "LETKF == ETKF + set_taper, state");
+    check_mat(a.covariance(), b.covariance(), 1e-14, "LETKF == ETKF + set_taper, covariance");
+    CHECK(a.has_taper(), "LETKF requires a taper at construction");
+}
+
+TEST_CASE("inflation on the ensemble family matches KF")
+{
+    // lambda = 1 is off; lambda > 1 inflates the analysis covariance.
+    const int N = 5, m = 2;
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+    const MatrixD H = random_matrix(m, N);
+    const MatrixD R = random_spd(m, 0.5);
+    const VectorD y = random_vector(m);
+    double prev = -1.0;
+    for (const double lam : {1.0, 1.05, 1.2}) {
+        EnKF<double> a(N, 200, 1);
+        ETKF<double> b(N, 200, 1);
+        a.set_inflation(lam);
+        b.set_inflation(lam);
+        a.initialize(x0, P0);
+        b.set_members(a.members());
+        a.measurement_update(y, H, R);
+        b.measurement_update(y, H, R);
+        const double tr = b.covariance().trace();
+        CHECK(tr > prev, "ensemble: larger lambda gives larger analysis trace(P)");
+        prev = tr;
+    }
+}
+
+// ===========================================================================
+// [smoothers]
+// ===========================================================================
+
+TEST_CASE("rts_smooth: terminal condition and uncertainty reduction")
+{
+    const int N = 4, m = 2, I = 8;
+    const Problem pr = make_problem(N, m, I);
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+    KF<double> f(N);
+    f.initialize(x0, P0);
+    const BatchOutput<double> rec = f.batch(pr.yv, pr.Hv, pr.Rv, pr.Fv, pr.Qv);
+    const SmoothOutput<double> sm = rts_smooth<double>(rec, pr.Fv, pr.Qv);
+
+    CHECK(sm.x_smoothed.size() == I && sm.P_smoothed.size() == I, "rts: lengths");
+    check_mat(sm.P_smoothed[I - 1], rec.P_posterior[I - 1], 1e-12,
+              "rts: terminal condition P_s = P_a");
+    bool shrinks = true;
+    for (int i = 0; i < I - 1; ++i) {
+        // Smoothing cannot increase the error covariance.
+        const double ds = min_eig(sm.P_smoothed[i] - rec.P_posterior[i]);
+        if (ds > 1e-9) shrinks = false;
+    }
+    CHECK(shrinks, "rts: smoothed covariance <= filtered covariance at every step");
+}
+
+TEST_CASE("EnKS converges to the exact RTS smoother as L grows")
+{
+    const int N = 4, m = 2, I = 6;
+    const Problem pr = make_problem(N, m, I);
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+
+    // Exact reference.
+    KF<double> f(N);
+    f.initialize(x0, P0);
+    const BatchOutput<double> rec = f.batch(pr.yv, pr.Hv, pr.Rv, pr.Fv, pr.Qv);
+    const SmoothOutput<double> ref = rts_smooth<double>(rec, pr.Fv, pr.Qv);
+
+    EnKS<double> ks(N, 4000, 11);
+    ks.initialize(x0, P0);
+    const SmoothOutput<double> sm = ks.smooth(pr.yv, pr.Hv, pr.Rv, pr.Fv, pr.Qv);
+
+    double worst_x = 0.0, worst_P = 0.0;
+    for (int i = 0; i < I; ++i) {
+        worst_x = std::max(worst_x, rel_err(ref.x_smoothed[i], sm.x_smoothed[i]));
+        worst_P = std::max(worst_P, rel_err(ref.P_smoothed[i], sm.P_smoothed[i]));
+    }
+    testing::check(worst_x < 0.3, "EnKS (L=4000) vs RTS, state", worst_x, 0.3);
+    testing::check(worst_P < 0.3, "EnKS (L=4000) vs RTS, covariance", worst_P, 0.3);
+}
+
+TEST_CASE("LEKS is EnKS with a required taper (exact)")
+{
+    const int N = 5, m = 2, I = 5;
+    const Problem pr = make_problem(N, m, I);
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+    const MatrixD C = ar1_taper(N, 0.55);
+
+    LEKS<double> a(N, 40, C, 3);
+    EnKS<double> b(N, 40, 3);
+    b.set_taper(C);
+    a.initialize(x0, P0);
+    const SmoothOutput<double> sa = a.smooth(pr.yv, pr.Hv, pr.Rv, pr.Fv, pr.Qv);
+    b.initialize(x0, P0);
+    const SmoothOutput<double> sb = b.smooth(pr.yv, pr.Hv, pr.Rv, pr.Fv, pr.Qv);
+    bool same = true;
+    for (int i = 0; i < I; ++i) {
+        same = same && rel_err(sa.x_smoothed[i], sb.x_smoothed[i]) < 1e-14
+                     && rel_err(sa.P_smoothed[i], sb.P_smoothed[i]) < 1e-14;
+    }
+    CHECK(same, "LEKS == EnKS + set_taper");
+    CHECK(a.has_taper(), "LEKS requires a taper at construction");
 }
 
 
