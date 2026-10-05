@@ -1,131 +1,53 @@
 #pragma once
 
-#ifdef PYTHON_MODULE
-#include <nanobind/eigen/dense.h>
-#include <nanobind/stl/vector.h>
-#include <nanobind/stl/string.h>
-#endif
+// ---------------------------------------------------------------------------
+// estimation::KF -- the Kalman filter in covariance form.
+//
+// Stores (x, P) directly. Same map as SquareRootKF (which stores P = L L^T),
+// including the tapered (LKF) variant -- see filter.hpp for the conventions.
+// The covariance update is the Joseph form on the untapered P, which keeps P
+// symmetric positive definite and is what makes the two backends agree when a
+// taper is set. For P- = F P F^T + Q the product is evaluated before being
+// assigned to P, and the result is re-symmetrized: F P F^T is symmetric only
+// in exact arithmetic.
+//
+// O(N^3) per update, dominated by the Cholesky of the m x m innovation
+// covariance and the two O(N^2 m) products. Fine for moderate N; this is the
+// reference ("oracle") implementation for the Monte Carlo methods.
+// ---------------------------------------------------------------------------
 
-#include <string>
-#include <vector>
-#include <format>
-#include <Eigen/Dense>
+#include "filter.hpp"
 
 
 namespace estimation {
 
     template <typename T = double>
-    class KF {
+    class KF : public Filter<T> {
     public:
-        KF(const size_t N);
+        using Scalar         = typename Filter<T>::Scalar;
+        using Vector         = typename Filter<T>::Vector;
+        using Matrix         = typename Filter<T>::Matrix;
+        using ConstVectorRef = typename Filter<T>::ConstVectorRef;
+        using ConstMatrixRef = typename Filter<T>::ConstMatrixRef;
 
-        typedef typename Eigen::Vector<T, Eigen::Dynamic> Vector;
-        typedef typename Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> Matrix;
+        explicit KF(std::size_t N);
 
-        typedef typename Eigen::Ref<Vector> VectorRef;
-        typedef typename Eigen::Ref<Matrix> MatrixRef;
+        const Vector &state() const override { return x_; }
+        Matrix covariance() const override { return P_; }
 
+        void initialize(ConstVectorRef x, ConstMatrixRef P) override;
 
-        Vector
-        get_x_hat() const;
+        void measurement_update(ConstVectorRef y,
+                                ConstMatrixRef H,
+                                ConstMatrixRef R) override;
 
-        Matrix
-        get_P() const;
-
-        void
-        initialize(const VectorRef &x_hat,
-                   const MatrixRef &P);
-
-        Eigen::Vector<T, Eigen::Dynamic>
-        measurement_update(const VectorRef &y,
-                           const MatrixRef &H,
-                           const MatrixRef &R);
-
-
-        Eigen::Vector<T, Eigen::Dynamic>
-        time_update(const MatrixRef &F,
-                    const MatrixRef &Q);
-
-        Eigen::Vector<T, Eigen::Dynamic>
-        time_update(const MatrixRef &F,
-                    const MatrixRef &Q,
-                    const VectorRef &z);
-
-
-        struct BatchOutputConfig {
-            BatchOutputConfig() :
-                path(""),
-                x_hat_posterior_template(""),
-                x_hat_prior_template(""),
-                P_posterior_template(""),
-                P_prior_template(""),
-                save_x_hat_posterior(false),
-                save_x_hat_prior(false),
-                save_P_posterior(false),
-                save_P_prior(false) {;}
-
-            std::string path;
-
-            std::string x_hat_posterior_template;
-            std::string x_hat_prior_template;
-
-            std::string P_posterior_template;
-            std::string P_prior_template;
-
-            bool save_x_hat_posterior;
-            bool save_x_hat_prior;
-
-            bool save_P_posterior;
-            bool save_P_prior;
-        };
-
-
-        class BatchOutput {
-        public:
-            BatchOutput() :
-                x_hat_posterior(),
-                x_hat_prior(),
-                P_posterior(),
-                P_prior() {;}
-
-            std::vector<Vector> x_hat_posterior;
-            std::vector<Vector> x_hat_prior;
-
-            std::vector<Matrix> P_posterior;
-            std::vector<Matrix> P_prior;
-        };
-
-
-        BatchOutput
-        batch(const BatchOutputConfig &config,
-              const VectorRef &mu,
-              const MatrixRef &PI,
-              const std::vector<const VectorRef> &y,
-              const std::vector<const MatrixRef> &H,
-              const std::vector<const MatrixRef> &R,
-              const std::vector<const MatrixRef> &F,
-              const std::vector<const MatrixRef> &Q,
-              const std::vector<const VectorRef> &z);
-
-        BatchOutput
-        batch(const BatchOutputConfig &config,
-              const VectorRef &mu,
-              const MatrixRef &PI,
-              const std::vector<const VectorRef> &y,
-              const std::vector<const MatrixRef> &H,
-              const std::vector<const MatrixRef> &R,
-              const std::vector<const MatrixRef> &F,
-              const std::vector<const MatrixRef> &Q);
-
+        void time_update(ConstMatrixRef F, ConstMatrixRef Q) override;
+        void time_update(ConstMatrixRef F, ConstMatrixRef Q,
+                         ConstVectorRef u) override;
 
     private:
-        size_t N;
-        Vector x_hat;
-        Matrix P;
-        Matrix A;
-        Matrix B;
-        Vector b;
-        Matrix C;
+        Vector x_;
+        Matrix P_;
     };
 
-}
+} // namespace estimation

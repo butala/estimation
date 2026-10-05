@@ -1,6 +1,8 @@
 #include <nanobind/nanobind.h>
 
+#include "filter.hpp"
 #include "kalman_filter.hpp"
+#include "square_root_kf.hpp"
 
 namespace nb = nanobind;
 
@@ -9,95 +11,81 @@ using namespace nb::literals;
 namespace estimation {
 
     NB_MODULE(lib, m) {
-        nb::class_<KF<double>> KF_(m, "KF");
+        using FilterT  = Filter<double>;
+        using ConstVec = FilterT::ConstVectorRef;
+        using ConstMat = FilterT::ConstMatrixRef;
+        using VecList  = std::vector<ConstVec>;
+        using MatList  = std::vector<ConstMat>;
 
-        KF_
-            .def(nb::init<const size_t>())
-            .def("x_hat", &KF<double>::get_x_hat)
-            .def("P", &KF<double>::get_P)
-            .def("initialize",
-                 &KF<double>::initialize,
-                 "x_hat"_a.noconvert(),
-                 "P"_a.noconvert())
-            .def("measurement_update",
-                 &KF<double>::measurement_update,
-                 "y"_a.noconvert(),
-                 "H"_a.noconvert(),
-                 "R"_a.noconvert())
+        // ---- shared interface ------------------------------------------------
+        // Every method in the family has exactly these names and these
+        // argument orders, in C++ and in Python.
+        nb::class_<FilterT>(m, "Filter")
+            .def("dimension", &FilterT::dimension)
+            .def("state", &FilterT::state)
+            .def("covariance", &FilterT::covariance)
+            .def("initialize", &FilterT::initialize,
+                 "x"_a.noconvert(), "P"_a.noconvert())
+            .def("measurement_update", &FilterT::measurement_update,
+                 "y"_a.noconvert(), "H"_a.noconvert(), "R"_a.noconvert())
             .def("time_update",
-                 nb::overload_cast<const KF<double>::MatrixRef &,
-                 const KF<double>::MatrixRef &>
-                 (&KF<double>::time_update),
-                 "F"_a.noconvert(),
-                 "Q"_a.noconvert())
-            .def("time_update_with_input",
-                 nb::overload_cast<const KF<double>::MatrixRef &,
-                 const KF<double>::MatrixRef &,
-                 const KF<double>::VectorRef &>
-                 (&KF<double>::time_update),
-                 "F"_a.noconvert(),
-                 "Q"_a.noconvert(),
-                 "z"_a.noconvert())
+                 [](FilterT &self, const ConstMat &F, const ConstMat &Q) {
+                     self.time_update(F, Q);
+                 },
+                 "F"_a.noconvert(), "Q"_a.noconvert())
+            .def("time_update",
+                 [](FilterT &self, const ConstMat &F, const ConstMat &Q,
+                    const ConstVec &u) {
+                     self.time_update(F, Q, u);
+                 },
+                 "F"_a.noconvert(), "Q"_a.noconvert(), "u"_a.noconvert())
+            .def("set_taper", &FilterT::set_taper, "C"_a.noconvert())
+            .def("clear_taper", &FilterT::clear_taper)
+            .def("has_taper", &FilterT::has_taper)
+            .def("set_inflation", &FilterT::set_inflation, "lambda"_a)
+            .def("clear_inflation", &FilterT::clear_inflation)
+            .def("inflation", &FilterT::inflation)
             .def("batch",
-                 nb::overload_cast<
-                 const KF<double>::BatchOutputConfig &,
-                 const KF<double>::VectorRef &,
-                 const KF<double>::MatrixRef &,
-                 const std::vector<const KF<double>::VectorRef> &,
-                 const std::vector<const KF<double>::MatrixRef> &,
-                 const std::vector<const KF<double>::MatrixRef> &,
-                 const std::vector<const KF<double>::MatrixRef> &,
-                 const std::vector<const KF<double>::MatrixRef> &>
-                 (&KF<double>::batch),
-                 "config"_a,
-                 "mu"_a.noconvert(),
-                 "PI"_a.noconvert(),
-                 "y"_a,
-                 "H"_a,
-                 "R"_a,
-                 "F"_a,
-                 "Q"_a)
-            .def("batch_with_input",
-                 nb::overload_cast<
-                 const KF<double>::BatchOutputConfig &,
-                 const KF<double>::VectorRef &,
-                 const KF<double>::MatrixRef &,
-                 const std::vector<const KF<double>::VectorRef> &,
-                 const std::vector<const KF<double>::MatrixRef> &,
-                 const std::vector<const KF<double>::MatrixRef> &,
-                 const std::vector<const KF<double>::MatrixRef> &,
-                 const std::vector<const KF<double>::MatrixRef> &,
-                 const std::vector<const KF<double>::VectorRef> &>
-                 (&KF<double>::batch),
-                 "config"_a,
-                 "mu"_a.noconvert(),
-                 "PI"_a.noconvert(),
-                 "y"_a,
-                 "H"_a,
-                 "R"_a,
-                 "F"_a,
-                 "Q"_a,
-                 "z"_a);
+                 [](FilterT &self, const VecList &y, const MatList &H,
+                    const MatList &R, const MatList &F, const MatList &Q,
+                    unsigned record) {
+                     return self.batch(y, H, R, F, Q, record);
+                 },
+                 "y"_a, "H"_a, "R"_a, "F"_a, "Q"_a,
+                 "record"_a = Record::Everything)
+            .def("batch",
+                 [](FilterT &self, const VecList &y, const MatList &H,
+                    const MatList &R, const MatList &F, const MatList &Q,
+                    const VecList &u, unsigned record) {
+                     return self.batch(y, H, R, F, Q, u, record);
+                 },
+                 "y"_a, "H"_a, "R"_a, "F"_a, "Q"_a, "u"_a,
+                 "record"_a = Record::Everything);
 
-
-        nb::class_<KF<double>::BatchOutputConfig>(KF_, "BatchOutputConfig")
+        nb::class_<BatchOutput<double>>(m, "BatchOutput")
             .def(nb::init<>())
-            .def_rw("path", &KF<double>::BatchOutputConfig::path)
-            .def_rw("x_hat_posterior_template", &KF<double>::BatchOutputConfig::x_hat_posterior_template)
-            .def_rw("x_hat_prior_template", &KF<double>::BatchOutputConfig::x_hat_prior_template)
-            .def_rw("P_posterior_template", &KF<double>::BatchOutputConfig::P_posterior_template)
-            .def_rw("P_prior_template", &KF<double>::BatchOutputConfig::P_prior_template)
-            .def_rw("save_x_hat_posterior", &KF<double>::BatchOutputConfig::save_x_hat_posterior)
-            .def_rw("save_x_hat_prior", &KF<double>::BatchOutputConfig::save_x_hat_prior)
-            .def_rw("save_P_posterior", &KF<double>::BatchOutputConfig::save_P_posterior)
-            .def_rw("save_P_prior", &KF<double>::BatchOutputConfig::save_P_posterior);
+            .def_rw("x_prior",     &BatchOutput<double>::x_prior)
+            .def_rw("x_posterior", &BatchOutput<double>::x_posterior)
+            .def_rw("P_prior",     &BatchOutput<double>::P_prior)
+            .def_rw("P_posterior", &BatchOutput<double>::P_posterior);
 
+        // Record mask constants.
+        m.attr("RECORD_NONE")        = nb::int_(Record::None);
+        m.attr("RECORD_X_PRIOR")     = nb::int_(Record::XPrior);
+        m.attr("RECORD_X_POSTERIOR") = nb::int_(Record::XPosterior);
+        m.attr("RECORD_P_PRIOR")     = nb::int_(Record::PPrior);
+        m.attr("RECORD_P_POSTERIOR") = nb::int_(Record::PPosterior);
+        m.attr("RECORD_MEANS")       = nb::int_(Record::Means);
+        m.attr("RECORD_COVARIANCES") = nb::int_(Record::Covariances);
+        m.attr("RECORD_EVERYTHING")  = nb::int_(Record::Everything);
 
-        nb::class_<KF<double>::BatchOutput>(KF_, "BatchOutput")
-            .def_rw("x_hat_posterior", &KF<double>::BatchOutput::x_hat_posterior)
-            .def_rw("x_hat_prior", &KF<double>::BatchOutput::x_hat_prior)
-            .def_rw("P_posterior", &KF<double>::BatchOutput::P_posterior)
-            .def_rw("P_prior", &KF<double>::BatchOutput::P_prior);
+        // ---- exact Kalman filter, two uncertainty representations -----------
+        nb::class_<KF<double>, FilterT>(m, "KF")
+            .def(nb::init<std::size_t>(), "N"_a);
+
+        nb::class_<SquareRootKF<double>, FilterT>(m, "SquareRootKF")
+            .def(nb::init<std::size_t>(), "N"_a)
+            .def("factor", &SquareRootKF<double>::factor);
     }
 
-}
+} // namespace estimation

@@ -1,181 +1,107 @@
-#include <cassert>
-
 #include "kalman_filter.hpp"
-
-#include <iostream>
 
 
 namespace estimation {
 
     template <typename T>
-    estimation::KF<T>::KF(const size_t N) :
-        N{N}
+    KF<T>::KF(const std::size_t N)
+        : Filter<T>(N), x_(Vector::Zero(N)), P_(Matrix::Zero(N, N))
     {
-        x_hat.resize(N);
-        P.resize(N, N);
     }
-
-
-    template <typename T>
-    KF<T>::Vector
-    KF<T>::get_x_hat() const
-    { return x_hat; }
-
-
-    template <typename T>
-    KF<T>::Matrix
-    KF<T>::get_P() const
-    { return P; }
 
 
     template <typename T>
     void
-    KF<T>::initialize(
-        const KF<T>::VectorRef &x_hat,
-        const KF<T>::MatrixRef &P)
+    KF<T>::initialize(const ConstVectorRef x, const ConstMatrixRef P)
     {
-        assert(this->x_hat.size() == N);
-        assert(this->P.rows() == N && this->P.cols() == N);
-
-        this->x_hat = x_hat;
-        this->P = P;
+        require(x.size() == static_cast<Eigen::Index>(this->N_),
+                "initialize: x must have length N");
+        require(P.rows() == static_cast<Eigen::Index>(this->N_) &&
+                P.cols() == static_cast<Eigen::Index>(this->N_),
+                "initialize: P must be N x N");
+        x_ = x;
+        P_ = P;
+        // Enforce the invariant "P_ is exactly symmetric".
+        this->symmetrize_in_place(P_);
     }
 
 
     template <typename T>
-    KF<T>::Vector
-    KF<T>::measurement_update(
-        const KF<T>::VectorRef &y,
-        const KF<T>::MatrixRef &H,
-        const KF<T>::MatrixRef &R)
+    void
+    KF<T>::measurement_update(const ConstVectorRef y,
+                              const ConstMatrixRef H,
+                              const ConstMatrixRef R)
     {
-        const size_t M = H.rows();
-        const size_t N = H.cols();
+        const Eigen::Index N = static_cast<Eigen::Index>(this->N_);
+        const Eigen::Index m = H.rows();
 
-        assert(y.size() == M);
-        assert(R.rows() == R.cols() == M);
+        require(y.size() == m,
+                "measurement_update: y must have length H.rows()");
+        require(H.cols() == N,
+                "measurement_update: H must have N columns");
+        require(R.rows() == m && R.cols() == m,
+                "measurement_update: R must be H.rows() x H.rows()");
 
-        A.resize(M, M);
-        B.resize(M, N);
-        b.resize(M);
-        C.resize(N, M);
+        // Multiplicative inflation on the prior covariance: P <- lambda P.
+        this->apply_inflation(P_);
 
-        A = H * (P * H.transpose());
-        A += R;
+        // Gain from the GAIN covariance (C o P with a taper, else P).
+        const Matrix Pg   = this->gain_covariance(P_);
+        const Matrix P_HT = Pg * H.transpose();          // P_g H^T (N x m)
+        const Matrix S    = H * P_HT + R;                // (m x m)
 
-        Eigen::LLT<KF<T>::MatrixRef> llt(A);
+        Eigen::LLT<Matrix> lltS(S);
+        require(lltS.info() == Eigen::Success,
+                "measurement_update: innovation covariance is not positive definite");
+        const Matrix K = lltS.solve(P_HT.transpose()).transpose();  // P_g H^T S^{-1}
 
-        B = llt.solve(H * P);
-        b = llt.solve(y - H * x_hat);
+        const Vector e = (y - H * x_).eval();
+        x_ += K * e;
 
-        C = P * H.transpose();
-
-        x_hat += C * b;
-        P -= C * B;
-
-        return x_hat;
+        // Joseph form on the UNTAPERED prior P (Butala et al., IEEE TIP 2009
+        // (4.26)). Keeping the snapshot of the prior also breaks the aliasing
+        // of P_ on both sides of the assignment.
+        const Matrix P_prior = P_;
+        const Matrix IKH     = Matrix::Identity(N, N) - K * H;
+        P_ = (IKH * P_prior * IKH.transpose() + K * R * K.transpose()).eval();
+        this->symmetrize_in_place(P_);
     }
 
 
     template <typename T>
-    KF<T>::Vector
-    KF<T>::time_update(
-        const KF<T>::MatrixRef &F,
-        const KF<T>::MatrixRef &Q)
+    void
+    KF<T>::time_update(const ConstMatrixRef F, const ConstMatrixRef Q)
     {
-        assert(F.rows() == F.cols() == N);
-        assert(Q.rows() == Q.cols() == N);
+        const Eigen::Index N = static_cast<Eigen::Index>(this->N_);
+        require(F.rows() == N && F.cols() == N,
+                "time_update: F must be N x N");
+        require(Q.rows() == N && Q.cols() == N,
+                "time_update: Q must be N x N");
 
-        x_hat = F * x_hat;
-        P = F * P * F.transpose() + Q;
+        x_ = (F * x_).eval();
 
-        return x_hat;
+        // Evaluate F P F^T before assigning to P: the destination P also occurs
+        // in the product, and Eigen does not guard against that aliasing.
+        // Inflation is applied in measurement_update.
+        const Matrix FP = (F * P_).eval();
+        P_ = (FP * F.transpose() + Q).eval();
+        this->symmetrize_in_place(P_);
     }
 
-    template <typename T>
-    KF<T>::Vector
-    KF<T>::time_update(
-        const KF<T>::MatrixRef &F,
-        const KF<T>::MatrixRef &Q,
-        const KF<T>::VectorRef &z)
-    {
-        assert(z.size() == N);
 
+    template <typename T>
+    void
+    KF<T>::time_update(const ConstMatrixRef F, const ConstMatrixRef Q,
+                       const ConstVectorRef u)
+    {
+        require(u.size() == static_cast<Eigen::Index>(this->N_),
+                "time_update: u must have length N");
         time_update(F, Q);
-        x_hat += z;
-
-        return x_hat;
-    }
-
-
-    template <typename T>
-    KF<T>::BatchOutput
-    KF<T>::batch(const BatchOutputConfig &config,
-                 const KF<T>::VectorRef &mu,
-                 const KF<T>::MatrixRef &PI,
-                 const std::vector<const KF<T>::VectorRef> &y,
-                 const std::vector<const KF<T>::MatrixRef> &H,
-                 const std::vector<const KF<T>::MatrixRef> &R,
-                 const std::vector<const KF<T>::MatrixRef> &F,
-                 const std::vector<const KF<T>::MatrixRef> &Q,
-                 const std::vector<const KF<T>::VectorRef> &z) {
-        BatchOutput output;
-
-        assert(mu.size() == N);
-        assert(PI.rows() == PI.cols() == N);
-
-        assert(y.size() == H.size() == R.size() == F.size() == Q.size());
-        size_t I = y.size();
-
-        if (z.size() > 0) {
-            assert(z.size() == I);
-        }
-
-        initialize(mu, PI);
-        for (size_t i = 0; i < I; i++) {
-            // measurement update
-            measurement_update(y[i], H[i], R[i]);
-            if (config.save_x_hat_posterior) {
-                output.x_hat_posterior.push_back(x_hat);
-            }
-            if (config.save_P_posterior) {
-                output.P_posterior.push_back(P);
-            }
-            // time update
-            if (z.size() > 0) {
-                time_update(F[i], Q[i], z[i]);
-            }
-            else {
-                time_update(F[i], Q[i]);
-            }
-            if (config.save_x_hat_prior) {
-                output.x_hat_prior.push_back(x_hat);
-            }
-            if (config.save_P_prior) {
-                output.P_prior.push_back(P);
-            }
-        }
-
-        return output;
-    }
-
-
-    template <typename T>
-    KF<T>::BatchOutput
-    KF<T>::batch(const BatchOutputConfig &config,
-                 const KF<T>::VectorRef &mu,
-                 const KF<T>::MatrixRef &PI,
-                 const std::vector<const KF<T>::VectorRef> &y,
-                 const std::vector<const KF<T>::MatrixRef> &H,
-                 const std::vector<const KF<T>::MatrixRef> &R,
-                 const std::vector<const KF<T>::MatrixRef> &F,
-                 const std::vector<const KF<T>::MatrixRef> &Q) {
-        std::vector<const KF<T>::VectorRef> z = std::vector<const KF<T>::VectorRef>();
-        return batch(config, mu, PI, y, H, R, F, Q, z);
+        x_ += u;
     }
 
 
     template class KF<double>;
     template class KF<float>;
 
-}
+} // namespace estimation
