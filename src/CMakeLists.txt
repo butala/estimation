@@ -1,5 +1,17 @@
-set(ESTIMATION_SOURCE kalman_filter.cpp square_root_kf.cpp)
-set(ESTIMATION_HEADER filter.hpp kalman_filter.hpp square_root_kf.hpp)
+set(ESTIMATION_SOURCE
+  kalman_filter.cpp
+  square_root_kf.cpp
+  ensemble_filter.cpp
+  ud_filter.cpp
+  smoother.cpp)
+set(ESTIMATION_HEADER
+  filter.hpp
+  kalman_filter.hpp
+  square_root_kf.hpp
+  ensemble_filter.hpp
+  ud_filter.hpp
+  smoother.hpp
+  testing.hpp)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)

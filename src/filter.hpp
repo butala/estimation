@@ -178,6 +178,13 @@ namespace estimation {
         void clear_taper()                   { taper_.resize(0, 0); }
         bool has_taper() const               { return taper_.size() > 0; }
 
+        // Elementwise taper (C o A), or A unchanged when no taper is set.
+        // Public because the smoothers localize their cross-covariances too.
+        Matrix tapered(const Matrix &A) const
+        {
+            return has_taper() ? Matrix(taper_.cwiseProduct(A)) : A;
+        }
+
         void set_inflation(Scalar lambda)    { inflation_ = lambda; }
         void clear_inflation()               { inflation_ = Scalar(1); }
         Scalar inflation() const             { return inflation_; }
