@@ -112,6 +112,11 @@ VAR_BETA = 1e-2        # bearing measurement noise variance (rad^2)
 IDEAL_RX0, IDEAL_RY0 = 10.0, -5.0
 IDEAL_VX, IDEAL_VY = -0.2, 0.2
 
+# Default seed for the realization used by --figures and by the docstrings.
+# Kay's figures are an unseeded realization, so this is *a* realization of his
+# example rather than his exact one.
+SEED = 12345
+
 # True initial state and the filter's initial guess.
 X0 = np.array([10.0, -5.0, -0.2, 0.2])
 MU0 = np.array([5.0, 5.0, 0.0, 0.0])
@@ -119,7 +124,12 @@ PI0 = 100.0 * np.eye(4)
 
 
 def transition(delta: float = DELTA) -> np.ndarray:
-    """A -- the constant-velocity transition, x = [r_x, r_y, v_x, v_y]."""
+    """A -- the constant-velocity transition, x = [r_x, r_y, v_x, v_y].
+
+    Equivalent to ``scipy.linalg.toeplitz([1, 0, 0, 0], r=[1, 0, delta, 0])``,
+    which is how Kay's example (and the notebook this was cleaned up from)
+    writes it; that equivalence is asserted in the tests.
+    """
     return np.array([[1.0, 0.0, delta, 0.0],
                      [0.0, 1.0, 0.0,    delta],
                      [0.0, 0.0, 1.0,    0.0],
@@ -315,7 +325,7 @@ def ekf_reference(y: list[np.ndarray], A: np.ndarray, Q: np.ndarray,
 # Realization -- the true track and the noisy range/bearing measurements
 # ==========================================================================
 
-def simulate(seed: int = 12345, n_steps: int = N_STEPS,
+def simulate(seed: int = SEED, n_steps: int = N_STEPS,
              A: np.ndarray | None = None, Q: np.ndarray | None = None,
              R: np.ndarray | None = None) -> dict:
     """One realization of the example: true track and measurements.
@@ -372,8 +382,8 @@ FIG_TITLES = {
 def make_figures(outdir: str, run: dict, est: dict) -> list[str]:
     """Write Figures 13.22-13.25 to *outdir*.  Returns the file names.
 
-    Requires matplotlib; raises ImportError otherwise.  The test suite does not
-    call this -- it is the reproducible half of the example.
+    Uses the Agg backend so this runs headless.  matplotlib is a declared
+    dependency (see pyproject.toml).
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -509,6 +519,19 @@ def test_model_constants():
     check(np.allclose([X0[2], X0[3]], [IDEAL_VX, IDEAL_VY]),
           "x[0] carries the ideal velocity")
     check(MU0.shape == (4,) and PI0.shape == (4, 4), "initial guess is 4-dimensional")
+
+
+def test_transition_matches_kays_toeplitz_construction():
+    # Kay (and the original notebook) builds A as
+    #     scipy.linalg.toeplitz([1, 0, 0, 0], r = [1, 0, delta, 0])
+    # which is an obscure way to say "constant velocity".  transition() spells
+    # the matrix out for readability; this pins that the two agree, so the
+    # explicit form cannot silently drift from the source's construction.
+    from scipy.linalg import toeplitz
+    for delta in (0.5, 1.0, 2.0):
+        A_ref = toeplitz([1.0, 0.0, 0.0, 0.0], r=[1.0, 0.0, delta, 0.0])
+        check(np.allclose(transition(delta), A_ref),
+              f"transition(delta={delta}) == toeplitz([1,0,0,0], r=[1,0,delta,0])")
 
 
 def test_bearing_needs_atan2():
@@ -662,24 +685,24 @@ def test_reproducible_with_a_seed():
     check(diff, "a different seed gives a different realization")
 
 
-def test_figures_are_reproducible_when_matplotlib_is_present():
-    try:
-        import matplotlib  # noqa: F401
-    except ImportError:
-        print("    (skipped: matplotlib is not installed)")
-        return
+def test_figures_13_22_to_13_25_are_written():
     import tempfile
     run_ = simulate(seed=1, n_steps=N_STEPS)
     est = ekf_via_library(run_["y"], run_["A"], run_["Q"], run_["R"])
     with tempfile.TemporaryDirectory() as d:
         written = make_figures(d, run_, est)
         check(len(written) == 4, "all four figures (13.22-13.25) are written")
+        check(sorted(os.path.basename(p) for p in written) ==
+              ["fig_13_22_track.png", "fig_13_23_range_bearing.png",
+               "fig_13_24_observed.png", "fig_13_25_ekf.png"],
+              "the four figures carry Kay's figure numbers")
         check(all(os.path.getsize(p) > 0 for p in written),
               "every figure is non-empty")
 
 
 TESTS = [
     test_model_constants,
+    test_transition_matches_kays_toeplitz_construction,
     test_bearing_needs_atan2,
     test_jacobian_matches_finite_differences,
     test_ekf_identity,
@@ -687,11 +710,24 @@ TESTS = [
     test_estimate_tracks_the_truth,
     test_estimate_is_consistent_with_its_covariance,
     test_reproducible_with_a_seed,
-    test_figures_are_reproducible_when_matplotlib_is_present,
+    test_figures_13_22_to_13_25_are_written,
 ]
 
 
-def main():
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # `python3 tests/test_kay_example_13_4.py --figures [dir]`
+    # writes Kay's Figures 13.22-13.25 and exits -- the reproducible half of
+    # the example, without running the assertions.
+    if argv and argv[0] == "--figures":
+        outdir = argv[1] if len(argv) > 1 else os.path.join("figures", "kay_13_4")
+        run_ = simulate(seed=SEED, n_steps=N_STEPS)
+        est = ekf_via_library(run_["y"], run_["A"], run_["Q"], run_["R"])
+        for path in make_figures(outdir, run_, est):
+            print("wrote", path)
+        return 0
+
     print(__doc__.splitlines()[0])
     for t in TESTS:
         run(t.__name__, t)

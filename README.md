@@ -119,16 +119,27 @@ This produces `build/src/libestimation.dylib` and the test binary
 
 ### Python extension module
 
-Needs `nanobind` (`pip install nanobind`) and Python development headers.
+The simplest route builds and installs the extension together with its
+dependencies (`numpy`, `scipy`, `matplotlib` -- see `pyproject.toml`):
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
+
+After that `import estimation.lib` works and no `ESTIMATION_LIB` variable is
+needed. Alternatively, build the extension in-tree (needs `nanobind` and Python
+development headers):
 
 ```bash
 cmake -B build-py -DESTIMATION_BUILD_PYTHON=ON \
       -Dnanobind_DIR=$(python3 -c "import nanobind; print(nanobind.cmake_dir())")
 cmake --build build-py -j
+export ESTIMATION_LIB=$(ls "$PWD"/build-py/src/lib.cpython-*.so)
 ```
 
-This produces `build-py/src/lib.cpython-*.so`. (A wheel can also be built with
-`pip install .` in a virtualenv, via scikit-build-core.)
+Both routes are supported by the Python tests; they prefer the installed
+package and fall back to `$ESTIMATION_LIB`.
 
 ## Test
 
@@ -175,16 +186,30 @@ and an independent textbook EKF are asserted, alongside:
 - mean NEES is O(state dimension) — the reported `P` is the right size
 - seeded reproducibility
 
-The four figures (13.22–13.25) are written by `make_figures(outdir)`; that case
-runs when matplotlib is installed and is skipped otherwise, so the test suite
-does not depend on a plotting library. 24 checks / 9 cases (26 with the figures).
+`scipy` is used only to verify that `transition(delta)` agrees with the
+`toeplitz([1, 0, 0, 0], r=[1, 0, delta, 0])` construction in the source, which
+`transition()` spells out as an explicit matrix for readability.
+
+**Run it** (34 checks / 10 cases):
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .                       # numpy, scipy, matplotlib + the extension
+python3 tests/test_kay_example_13_4.py # assertions
+```
+
+and to write Kay's Figures 13.22–13.25 to `figures/kay_13_4/`:
+
+```bash
+python3 tests/test_kay_example_13_4.py --figures
+```
 
 ### Python binding tests — 20 cases / 119 checks
 
 ```bash
-export ESTIMATION_LIB=$(ls "$PWD"/build-py/src/lib.cpython-*.so)
 python3 tests/test_bindings.py
 ```
+(after `pip install -e .`; or set `ESTIMATION_LIB` to an in-tree `lib*.so`)
 
 (Or `python3 -m pytest tests/test_bindings.py -q`.) Covers the zero-copy
 contract, strict dtype, read-only inputs, output copy-safety, `ValueError`

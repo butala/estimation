@@ -5,6 +5,17 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "estimation"
 version = "0.0.1"
+# numpy is the Python-side array interface. scipy and matplotlib are used by
+# the worked examples (tests/test_kay_example_13_4.py reproduces Kay, Estimation
+# Theory Example 13.4, and writes Figures 13.22-13.25).
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [tool.scikit-build]
 wheel.install-dir = "estimation"
