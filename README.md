@@ -24,6 +24,13 @@ Kalman-family state estimation in C++ (Eigen) with Python bindings (nanobind).
 **Localization is a knob, not an algorithm:** `LETKF` is `ETKF` plus a *required*
 taper, `LEKS` is `EnKS` plus a required taper — exactly as `LKF = KF + set_taper`.
 
+Every filter is `template <typename T = double>` and is explicitly instantiated
+for `double` and `float`; `Scalar = T` is the coefficient type the bodies use so
+the same source is precision-agnostic. Numeric literals go through
+`Scalar(...)` to keep arithmetic in `T`, and floors use
+`std::numeric_limits<Scalar>::min()` rather than a decimal literal (which
+underflows to zero in `float`).
+
 **Smoothers** (fixed interval):
 
 | Class | What it is |
@@ -125,7 +132,7 @@ This produces `build-py/src/lib.cpython-*.so`. (A wheel can also be built with
 
 ## Test
 
-### C++ unit tests — 42 cases / 222 checks
+### C++ unit tests — 46 cases / 230 checks
 
 ```bash
 ./build/src/test
@@ -140,7 +147,10 @@ the `u` overload; edge cases (`N=1`, `Q=0`, rank-deficient `Q`, `F=0`, tiny
 `R`); 500-step drift-free stability; `batch`/`Record` masks and chunking;
 `EnSRF == EAKF == ETKF` and the ETKF rotation; ensemble convergence to
 `KF`/`LETKF`; `rts_smooth` monotonicity; `EnKS → RTS`; `LEKS == EnKS + taper`;
-contract violations; 20000-update memory stability.
+contract violations; 20000-update memory stability; and four smoke cases for
+the explicitly instantiated `float` build (`KF == SquareRootKF == UDKF`, with
+and without a taper, the ensemble trio with a finiteness check on the ETKF
+eigenvalue clamp, and `EnKS`/`rts_smooth` finiteness).
 
 ### Python binding tests — 20 cases / 119 checks
 

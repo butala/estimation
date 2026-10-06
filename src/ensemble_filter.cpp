@@ -1,4 +1,5 @@
 #include <cassert>
+#include <limits>
 
 #include "ensemble_filter.hpp"
 
@@ -409,7 +410,11 @@ namespace estimation {
 
         Eigen::SelfAdjointEigenSolver<Matrix> es(C);
         require(es.info() == Eigen::Success, "ETKF: eigen decomposition failed");
-        const Vector lam = es.eigenvalues().cwiseMax(Scalar(1e-300));
+        // Eigenvalues of C are >= 1 (C = I + ...), so this clamp is defensive;
+        // it must still be a value that survives the Scalar. numeric_limits::min()
+        // is the smallest positive normal -- Scalar(1e-300) is 0 for float.
+        const Vector lam =
+            es.eigenvalues().cwiseMax(std::numeric_limits<Scalar>::min());
         const Vector inv_sqrt = lam.cwiseSqrt().cwiseInverse();
         // T = C^{-1/2} = U diag(lambda^{-1/2}) U^T (symmetric).
         const Matrix Tmat = (es.eigenvectors() * inv_sqrt.asDiagonal()

@@ -52,6 +52,16 @@ using CVecD   = TypesD::ConstVectorRef;
 using CMatD   = TypesD::ConstMatrixRef;
 using FilterD = Filter<double>;
 
+// The library is explicitly instantiated for float as well as double, but the
+// rest of this file only exercises double. The cases in [the float
+// instantiations] are the smoke tests for that half of the build.
+using TypesF  = Types<float>;
+using VectorF = TypesF::Vector;
+using MatrixF = TypesF::Matrix;
+using CVecF   = TypesF::ConstVectorRef;
+using CMatF   = TypesF::ConstMatrixRef;
+using FilterF = Filter<float>;
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -1142,6 +1152,178 @@ TEST_CASE("Bierman downdate matches a dense factorization")
     const VectorD x_ref = x0 + k * 0.3;
     check_vec(f.state(), x_ref, 1e-11, "Bierman row realizes the Kalman mean");
 }
+
+// ===========================================================================
+// [the float instantiations]
+// ===========================================================================
+
+// Helpers in float. Values are drawn from the same generators and narrowed, so
+// the two precisions see the same problem.
+static MatrixF
+to_float(const MatrixD &A)
+{
+    return A.cast<float>();
+}
+
+static VectorF
+to_float(const VectorD &a)
+{
+    return a.cast<float>();
+}
+
+TEST_CASE("float: KF == SquareRootKF == UDKF")
+{
+    // The whole point of instantiating float is that the bodies are
+    // precision-agnostic; this checks the exact-Kalman trio agrees there too.
+    // Tolerances are looser than the double tests: float has ~7 digits.
+    const int N = 5, m = 2;
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+    const MatrixD H  = random_matrix(m, N);
+    const MatrixD R  = random_spd(m, 0.5);
+    const VectorD y  = random_vector(m);
+    const MatrixD F  = random_matrix(N, N) * 0.2 + MatrixD::Identity(N, N) * 0.9;
+    const MatrixD Q  = random_spd(N, 1e-3);
+
+    KF<float>          a(N);
+    SquareRootKF<float> b(N);
+    UDKF<float>        c(N);
+    for (FilterF *f : {static_cast<FilterF *>(&a), static_cast<FilterF *>(&b),
+                       static_cast<FilterF *>(&c)}) {
+        f->initialize(to_float(x0), to_float(P0));
+        f->measurement_update(to_float(y), to_float(H), to_float(R));
+    }
+    double worst = 0.0;
+    worst = std::max(worst, double((a.state() - b.state()).norm()));
+    worst = std::max(worst, double((a.state() - c.state()).norm()));
+    worst = std::max(worst, double((a.covariance() - b.covariance()).norm()));
+    worst = std::max(worst, double((a.covariance() - c.covariance()).norm()));
+    testing::check(worst <= 1e-4,
+                   "float: KF == SquareRootKF == UDKF after one analysis", worst, 1e-4);
+
+    for (FilterF *f : {static_cast<FilterF *>(&a), static_cast<FilterF *>(&b),
+                       static_cast<FilterF *>(&c)}) {
+        f->time_update(to_float(F), to_float(Q));
+    }
+    worst = 0.0;
+    worst = std::max(worst, double((a.state() - b.state()).norm()));
+    worst = std::max(worst, double((a.state() - c.state()).norm()));
+    worst = std::max(worst, double((a.covariance() - b.covariance()).norm()));
+    worst = std::max(worst, double((a.covariance() - c.covariance()).norm()));
+    testing::check(worst <= 1e-4,
+                   "float: KF == SquareRootKF == UDKF after one cycle", worst, 1e-4);
+}
+
+TEST_CASE("float: KF == SquareRootKF == UDKF under a taper")
+{
+    const int N = 5, m = 2;
+    const MatrixD C = ar1_taper(N, 0.5);
+    KF<float>           a(N);
+    SquareRootKF<float> b(N);
+    UDKF<float>         c(N);
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+    const MatrixD H  = random_matrix(m, N);
+    const MatrixD R  = random_spd(m, 0.5);
+    const VectorD y  = random_vector(m);
+    for (FilterF *f : {static_cast<FilterF *>(&a), static_cast<FilterF *>(&b),
+                       static_cast<FilterF *>(&c)}) {
+        f->set_taper(to_float(C));
+        f->initialize(to_float(x0), to_float(P0));
+        f->measurement_update(to_float(y), to_float(H), to_float(R));
+    }
+    double worst = 0.0;
+    worst = std::max(worst, double((a.state() - b.state()).norm()));
+    worst = std::max(worst, double((a.state() - c.state()).norm()));
+    worst = std::max(worst, double((a.covariance() - b.covariance()).norm()));
+    testing::check(worst <= 1e-4,
+                   "float: the trio agrees with a taper (the LKF)", worst, 1e-4);
+}
+
+TEST_CASE("float: the ensemble trio agrees and stays finite")
+{
+    // Exercises the ensemble path in float, including ETKF's eigenvalue clamp.
+    // Regression note: the clamp floor was Scalar(1e-300), which is 0 for
+    // float, so a zero eigenvalue would have produced inf instead of a large
+    // finite number. (ETKF's C is >= I so the clamp is defensive today, but it
+    // must still survive the Scalar.)
+    const int N = 5, m = 2, L = 60;
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+    const MatrixD H  = random_matrix(m, N);
+    const MatrixD R  = random_spd(m, 0.5);
+    const VectorD y  = random_vector(m);
+
+    EnSRF<float> a(N, L, 1);
+    EAKF<float>  b(N, L, 1);
+    ETKF<float>  c(N, L, 1);
+    a.initialize(to_float(x0), to_float(P0));
+    const MatrixF X = a.members();
+    b.set_members(X);
+    c.set_members(X);
+    for (EnsembleFilter<float> *e : {static_cast<EnsembleFilter<float> *>(&a),
+                                     static_cast<EnsembleFilter<float> *>(&b),
+                                     static_cast<EnsembleFilter<float> *>(&c)}) {
+        e->measurement_update(to_float(y), to_float(H), to_float(R));
+    }
+    testing::check(a.covariance().allFinite() && b.covariance().allFinite() &&
+                       c.covariance().allFinite(),
+                   "float: ensemble covariances are finite (no inf from the clamp)");
+    testing::check(a.state().allFinite() && b.state().allFinite() &&
+                       c.state().allFinite(),
+                   "float: ensemble states are finite");
+    double worst = 0.0;
+    worst = std::max(worst, double((a.state() - b.state()).norm()));
+    worst = std::max(worst, double((a.state() - c.state()).norm()));
+    worst = std::max(worst, double((a.covariance() - b.covariance()).norm()));
+    worst = std::max(worst, double((a.covariance() - c.covariance()).norm()));
+    testing::check(worst <= 1e-3,
+                   "float: EnSRF == EAKF == ETKF", worst, 1e-3);
+}
+
+TEST_CASE("float: EnKS and rts_smooth stay finite")
+{
+    const int N = 4, m = 2, I = 4;
+    const Problem pr = make_problem(N, m, I);
+    const VectorD x0 = random_vector(N);
+    const MatrixD P0 = random_spd(N);
+
+    std::vector<VectorF> ys, us;
+    std::vector<MatrixF> Hs, Rs, Fs, Qs;
+    for (int i = 0; i < I; ++i) {
+        ys.push_back(to_float(pr.y[i]));
+        Hs.push_back(to_float(pr.H[i]));
+        Rs.push_back(to_float(pr.R[i]));
+        Fs.push_back(to_float(pr.F[i]));
+        Qs.push_back(to_float(pr.Q[i]));
+        us.push_back(to_float(pr.u[i]));
+    }
+    std::vector<CVecF> yv, uv;
+    std::vector<CMatF> Hv, Rv, Fv, Qv;
+    for (int i = 0; i < I; ++i) {
+        yv.push_back(ys[i]); uv.push_back(us[i]);
+        Hv.push_back(Hs[i]); Rv.push_back(Rs[i]);
+        Fv.push_back(Fs[i]); Qv.push_back(Qs[i]);
+    }
+
+    EnKS<float> ks(N, 50, 2);
+    ks.initialize(to_float(x0), to_float(P0));
+    const SmoothOutput<float> sm = ks.smooth(yv, Hv, Rv, Fv, Qv);
+    bool finite = sm.x_smoothed.size() == I;
+    for (int i = 0; i < I && finite; ++i)
+        finite = sm.x_smoothed[i].allFinite() && sm.P_smoothed[i].allFinite();
+    testing::check(finite, "float: EnKS trajectories are finite");
+
+    KF<float> f(N);
+    f.initialize(to_float(x0), to_float(P0));
+    const BatchOutput<float> rec = f.batch(yv, Hv, Rv, Fv, Qv);
+    const SmoothOutput<float> ex = rts_smooth<float>(rec, Fv, Qv);
+    finite = ex.x_smoothed.size() == I;
+    for (int i = 0; i < I && finite; ++i)
+        finite = ex.x_smoothed[i].allFinite() && ex.P_smoothed[i].allFinite();
+    testing::check(finite, "float: rts_smooth trajectories are finite");
+}
+
 
 // ===========================================================================
 // [the ensemble family]
