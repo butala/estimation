@@ -6,19 +6,32 @@
 //   rts_smooth(record, F, Q)   exact Rauch-Tung-Striebel, operating on a
 //                              forward Filter::BatchOutput -- the reference
 //                              that EnKS is validated against
-//   EnKS<T>                    Evensen's ensemble Kalman smoother: an EnKF
-//                              forward pass storing lag-one statistics, then a
-//                              backward pass with the lag-one cross-covariance
-//                              C_i = Cov(x^a_i, x^f_{i+1})
+//   EnKS<T>                    Butala, Fathpour & Bhatt's localized ensemble
+//                              Kalman smoother -- a Monte Carlo approximation
+//                              to the BRYSON-FRAZIER smoother (IEEE, 2012).
+//                              An EnKF forward pass, then a backward recursion
+//                              on an ensemble adjoint variable, then the
+//                              smoothed estimates.  It inverts only the
+//                              INNOVATION covariance R_e,i (M x M, and >= R > 0),
+//                              never the forecast covariance: that is the whole
+//                              point of using the BF rather than the RTS form,
+//                              whose P_{i|i-1}^{-1} is both undesirable and
+//                              singular for L < N.
 //   LEKS<T>                    = EnKS + a REQUIRED taper (localized EnKS)
 //
 // Same rule as the filters: localization is a knob, not a separate algorithm.
-// The taper acts on the smoother's cross-covariance (the regression of state i
-// on state i+1), which is what "localizing the smoother" means in the LETKS
-// sense; with no taper LEKS is EnKS and with no taper rts_smooth is the exact
-// Kalman smoother.
+// The taper enters the EnKS exactly where it enters the EnKF -- in the gain and
+// in the innovation covariance -- and additionally in the third stage, where
+// C'_i and C''_i of the paper are both taken to be the filter's taper. With no
+// taper LEKS is EnKS; with no taper rts_smooth is the exact Kalman smoother.
+//
+// rts_smooth is included as the exact reference: the two agree on the smoothed
+// mean in the linear-Gaussian case, which is how the tests check the BF form
+// against something independent of it.
 // ---------------------------------------------------------------------------
 
+#include <cstdint>
+#include <random>
 #include <vector>
 
 #include "filter.hpp"
@@ -83,7 +96,8 @@ namespace estimation {
                    std::vector<ConstVectorRef>());
 
     protected:
-        EnKF<T> fwd_;   // the forward pass (classic EnKS)
+        EnKF<T> fwd_;        // the forward pass (the EnKF of stage 1)
+        std::mt19937_64 rng_;   // for the Z_i of the adjoint ensemble, eq. (13)
     };
 
 

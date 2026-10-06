@@ -25,9 +25,13 @@ What is tested here that nothing else tests
   spurious correlations and the localised one is not.  That is the entire
   reason the knob exists.
 * ``set_inflation`` for efficacy, likewise.
-* that smoothing helps on a high-dimensional chaotic problem (deferred: the
-  ensemble smoother inverts the forecast covariance and needs L comfortably
-  above N to stay conditioned -- smoothing itself is covered in depth by
+* that smoothing helps on a high-dimensional chaotic problem (deferred, for a
+  narrower reason than it used to be: the EnKS forward pass propagates through
+  the LINEAR time_update F x + u, and this model's dynamics are nonlinear, so
+  the smoother cannot run the model on each member the way ensemble_filter
+  below does.  The Bryson-Frazier form itself needs only the innovation
+  covariance inverse and imposes no condition on L versus N -- see
+  src/smoother.hpp.  Smoothing is covered in depth by
   tests/test_linear_gaussian_smoother.py, including against closed forms).
 
 Lorenz's own geometry is checked too: x[i] = F for all i is an exact
