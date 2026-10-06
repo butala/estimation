@@ -410,8 +410,8 @@ def make_figures(outdir: str, run: dict, est: dict) -> list[str]:
     ax.set_ylabel(r"$r_y[n]$")
     ax.set_title(FIG_TITLES["fig_13_22"])
     ax.legend()
-    path = os.path.join(outdir, "fig_13_22_track.png")
-    fig.savefig(path, dpi=120, bbox_inches="tight")
+    path = os.path.join(outdir, "fig_13_22_track.pdf")
+    fig.savefig(path, bbox_inches="tight")   # .pdf -> vector output
     plt.close(fig)
     written.append(path)
 
@@ -426,8 +426,8 @@ def make_figures(outdir: str, run: dict, est: dict) -> list[str]:
     ax[1].set_ylabel(r"$\beta[n]$")
     ax[1].set_title("Bearing")
     fig.suptitle(FIG_TITLES["fig_13_23"])
-    path = os.path.join(outdir, "fig_13_23_range_bearing.png")
-    fig.savefig(path, dpi=120, bbox_inches="tight")
+    path = os.path.join(outdir, "fig_13_23_range_bearing.pdf")
+    fig.savefig(path, bbox_inches="tight")   # .pdf -> vector output
     plt.close(fig)
     written.append(path)
 
@@ -439,8 +439,8 @@ def make_figures(outdir: str, run: dict, est: dict) -> list[str]:
     ax.set_ylabel(r"$r_y[n]$")
     ax.set_title(FIG_TITLES["fig_13_24"])
     ax.legend()
-    path = os.path.join(outdir, "fig_13_24_observed.png")
-    fig.savefig(path, dpi=120, bbox_inches="tight")
+    path = os.path.join(outdir, "fig_13_24_observed.pdf")
+    fig.savefig(path, bbox_inches="tight")   # .pdf -> vector output
     plt.close(fig)
     written.append(path)
 
@@ -452,8 +452,8 @@ def make_figures(outdir: str, run: dict, est: dict) -> list[str]:
     ax.set_ylabel(r"$r_y[n]$")
     ax.set_title(FIG_TITLES["fig_13_25"])
     ax.legend()
-    path = os.path.join(outdir, "fig_13_25_ekf.png")
-    fig.savefig(path, dpi=120, bbox_inches="tight")
+    path = os.path.join(outdir, "fig_13_25_ekf.pdf")
+    fig.savefig(path, bbox_inches="tight")   # .pdf -> vector output
     plt.close(fig)
     written.append(path)
 
@@ -693,8 +693,8 @@ def test_figures_13_22_to_13_25_are_written():
         written = make_figures(d, run_, est)
         check(len(written) == 4, "all four figures (13.22-13.25) are written")
         check(sorted(os.path.basename(p) for p in written) ==
-              ["fig_13_22_track.png", "fig_13_23_range_bearing.png",
-               "fig_13_24_observed.png", "fig_13_25_ekf.png"],
+              ["fig_13_22_track.pdf", "fig_13_23_range_bearing.pdf",
+               "fig_13_24_observed.pdf", "fig_13_25_ekf.pdf"],
               "the four figures carry Kay's figure numbers")
         check(all(os.path.getsize(p) > 0 for p in written),
               "every figure is non-empty")

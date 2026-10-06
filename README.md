@@ -198,7 +198,7 @@ pip install -e .                       # numpy, scipy, matplotlib + the extensio
 python3 tests/test_kay_example_13_4.py # assertions
 ```
 
-and to write Kay's Figures 13.22–13.25 to `figures/kay_13_4/`:
+and to write Kay's Figures 13.22–13.25 (vector PDF) to `figures/kay_13_4/`:
 
 ```bash
 python3 tests/test_kay_example_13_4.py --figures
