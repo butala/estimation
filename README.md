@@ -204,6 +204,22 @@ and to write Kay's Figures 13.22–13.25 (vector PDF) to `figures/kay_13_4/`:
 python3 tests/test_kay_example_13_4.py --figures
 ```
 
+### Tier-1 state estimation examples
+
+Three worked examples, each covering a gap the unit tests cannot. All follow the
+Kay file's structure: the model in the literature's terms, a second reference or
+a closed form to check against, and `--figures` for the plots.
+
+| File | What it pins down |
+|---|---|
+| `tests/test_lorenz_63.py` (9 cases / 17 checks) | **nonlinear dynamics.** Lorenz (1963), chaotic. Asserts the identity that makes the EKF *time update* expressible as `time_update(F, Q, u)` with `u = f(x) - F x` -- the dynamics analogue of Kay's measurement identity. Then `ETKF` beats the `EKF` (median RMSE ratio over 5 realizations) and, the interesting UQ claim, **the ensemble spread is calibrated (mean NEES ~ 3 = state dimension) where the EKF is badly overconfident (NEES 15-99)**. |
+| `tests/test_linear_gaussian_smoother.py` (9 cases / 19 checks) | **validation against mathematics, not against another implementation.** A scalar random walk. The reference is *Bayes' rule written out*: the smoothed mean and covariance are `Lambda^{-1} b` and `Lambda^{-1}` for the path-Laplacian precision -- no filtering or smoothing recursion appears in it. `rts_smooth` matches it to 1e-9 through all three exact filters, `EnKS` reaches it as `L -> infinity`, and the steady-state variance matches the closed-form algebraic Riccati solution `v = (q + sqrt(q^2 + 4qr))/2`. |
+| `tests/test_lorenz_96.py` (8 cases / 16 checks) | **localization and inflation at scale.** Lorenz (1996), `N = 40` on a ring -- the field's standard assimilation testbed (DART, PDAF, DataAssimilationBenchmarks.jl). Asserts the *efficacy* of `set_taper`, which nothing else does: at `L = 45` the taper halves the error (1.42 vs 2.97). And the mechanism, measured: with a taper the gain leaves the ensemble span, so the analysis covariance has rank up to `(L-1) + M` rather than `L-1`, and the ensemble must truncate. At `L = 45` it realizes the tapered Kalman target *exactly* (mismatch 0.0000); at `L = 20` the truncation is a measurable 9% error. |
+
+Chaotic systems make pointwise assertions meaningless, so the two Lorenz files
+assert **statistics over long windows and relative claims between methods**,
+with the integrator and seeds fixed.
+
 ### Python binding tests — 20 cases / 119 checks
 
 ```bash
@@ -265,6 +281,9 @@ src/
 tests/
   test_bindings.py          Python binding tests (binding contract + the family)
   test_kay_example_13_4.py  Kay, Estimation Theory Ex 13.4 (EKF worked example)
+  test_lorenz_63.py         Lorenz (1963): nonlinear dynamics, EKF vs ensemble
+  test_lorenz_96.py         Lorenz (1996): localization and inflation
+  test_linear_gaussian_smoother.py  smoothing against closed forms
 ```
 
 Build flags: `-O3`, `-mtune=native` always; `-march=native` only for local

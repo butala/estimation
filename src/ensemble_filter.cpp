@@ -168,10 +168,19 @@ namespace estimation {
         this->symmetrize_in_place(A);
         Eigen::SelfAdjointEigenSolver<Matrix> es(A);
         require(es.info() == Eigen::Success, "joseph_anomalies: eigen failed");
+        // Eigenvalues ASCEND, so the dominant subspace is at the END: take the
+        // r largest, not the first r.  Counting from the front makes r collapse
+        // to 0 the moment the smallest eigenvalue is a non-positive round-off,
+        // which silently zeroes the analysis covariance.
+        const Eigen::Index n = A.rows();
         const Vector lam = es.eigenvalues().cwiseMax(Scalar(0));
-
+        // Rank by a RELATIVE tolerance: an exact "> 0" test lets round-off in
+        // the smallest eigenvalue flip the truncation between runs, which makes
+        // the analysis nondeterministic.
+        const Scalar tol =
+            lam(n - 1) * std::numeric_limits<Scalar>::epsilon() * Scalar(n);
         Eigen::Index r = 0;
-        while (r < lam.size() && lam(r) > Scalar(0)) ++r;
+        while (r < n && lam(n - 1 - r) > tol) ++r;
         if (r > L - 1) r = L - 1;   // keep the columns summing to zero possible
 
         // Orthonormal basis of 1^perp in R^L, as the trailing columns of a
@@ -182,9 +191,13 @@ namespace estimation {
         const Matrix B  = Qm.rightCols(L - 1);            // L x (L-1)
         const Matrix Qr = B.leftCols(r).transpose();      // r x L, Qr 1 = 0
 
-        const Matrix Ur   = es.eigenvectors().leftCols(r);      // N x r
-        Matrix Sr(r, r);
-        for (Eigen::Index i = 0; i < r; ++i) Sr(i, i) = std::sqrt(lam(i));
+        const Matrix Ur = es.eigenvectors().rightCols(r);  // the r largest
+        // Zero-initialized: Eigen leaves Matrix(n, n) uninitialized, so setting
+        // only the diagonal leaves garbage off-diagonal entries -- and U Sr Qr
+        // then carries that garbage into the anomalies (a scale error and a
+        // source of run-to-run nondeterminism).
+        Matrix Sr = Matrix::Zero(r, r);
+        for (Eigen::Index i = 0; i < r; ++i) Sr(i, i) = std::sqrt(lam(n - r + i));
         return (Ur * Sr * Qr).eval();
     }
 
