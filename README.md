@@ -152,6 +152,33 @@ the explicitly instantiated `float` build (`KF == SquareRootKF == UDKF`, with
 and without a taper, the ensemble trio with a finiteness check on the ETKF
 eigenvalue clamp, and `EnKS`/`rts_smooth` finiteness).
 
+### Worked example from the literature — `tests/test_kay_example_13_4.py`
+
+A complete reproduction of Kay, *Fundamentals of Statistical Signal
+Processing, Vol. I*, **Example 13.4** (vehicle tracking with the extended
+Kalman filter; Figures 13.22–13.25). It is Kay's MIMO case — a 4-dimensional
+state observed through two channels at once, range and bearing — and the
+measurement is nonlinear while the dynamics are exactly linear.
+
+The reason it lives in this project: **the EKF is this library's linear `KF`
+evaluated at the linearisation.** With `H_n = dh/dx` at the predicted state,
+`y' = y - h(x^-) + H_n x^-` and `H' = H_n` give `y' - H' x^- == y - h(x^-)`
+exactly, so `measurement_update(y', H', R)` *is* Kay's EKF update. That identity
+and an independent textbook EKF are asserted, alongside:
+
+- the model constants and the ideal track, as Kay sets them up
+- `observation_jacobian` against central differences
+- `atan2` is **required**, not a detail: `r_x[n] = 10 - 0.2 n` vanishes exactly
+  at `n = 50`, so `arctan(r_y/r_x)` is undefined there and is off by `pi` for
+  `r_x < 0`. The test pins both the crossing and the branch loss.
+- the estimate converges onto the track and beats a raw range/bearing fix
+- mean NEES is O(state dimension) — the reported `P` is the right size
+- seeded reproducibility
+
+The four figures (13.22–13.25) are written by `make_figures(outdir)`; that case
+runs when matplotlib is installed and is skipped otherwise, so the test suite
+does not depend on a plotting library. 24 checks / 9 cases (26 with the figures).
+
 ### Python binding tests — 20 cases / 119 checks
 
 ```bash
@@ -211,7 +238,8 @@ src/
   testing.hpp               minimal dependency-free test harness
   test.cpp                  C++ unit tests
 tests/
-  test_bindings.py          Python binding tests
+  test_bindings.py          Python binding tests (binding contract + the family)
+  test_kay_example_13_4.py  Kay, Estimation Theory Ex 13.4 (EKF worked example)
 ```
 
 Build flags: `-O3`, `-mtune=native` always; `-march=native` only for local
