@@ -237,7 +237,7 @@ Ranked by "nobody has it, everyone needs it":
 - Butala, Frazin, Chen, Kamalabadi, *IEEE TIP* 18(8):1573–1587, 2009.
 - Butala, PhD thesis, Thms 4.1 (EnKF \(\to\) LKF) and 4.20 (EnKS \(\to\) LKS), App. A.
 - Butala, Fathpour, Bhatt, "A localized ensemble Kalman smoother."
-- See also `ENKF_CONVERGENCE_ERRATUM.md` (this repo) — the \(L^p\) repair of App. A.
+- See also `enkf_convergence_erratum.md` (this repo) — the \(L^p\) repair of App. A.
 
 **Frontier theory**
 - Calvello, Reich, Stuart, *Acta Numerica* 2025 (arXiv:2209.11371) — open problems.

@@ -293,7 +293,9 @@ makes results compiler-dependent.
 
 ## Related documents
 
-* `ENKF_CONVERGENCE_ERRATUM.{md,pdf}` — the gap in the proof of EnKF
+* `enkf_convergence_erratum.{md,pdf}` — the gap in the proof of EnKF
   convergence noted by Mandel–Cobb–Beezley, and the corrected proof.
-* `RESEARCH_AGENDA.md` — state of the art in ensemble Kalman convergence theory,
+* `research_agenda.md` — state of the art in ensemble Kalman convergence theory,
   and the prioritized next steps.
+* `taxonomy_paper_outline.md` — outline for a paper organizing Kalman and
+  ensemble smoothers by invertibility constraint.
